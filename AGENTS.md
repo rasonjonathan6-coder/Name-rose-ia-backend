@@ -172,6 +172,30 @@ itself, so a bare run fails at "demo page loads".
   case deliberately leaves a broken config active.
 - Raise the CDP timeout for these runs — a real model can take tens of seconds
   (`scripts/cdp.mjs` uses 180s).
+- **The keyless provider can be down through no fault of the harness.** On
+  2026-09-26 it returned 500 `ENOSPC` for uncached completions (and 429/401
+  later), while cached prompts still returned 200. Confirm with a direct `curl`
+  against `https://text.pollinations.ai/openai` before debugging the extension:
+  if `curl` shows the same error, the provider is at fault. Phase 5 then scores
+  21/31 with the generation checks failing and the rest passing; re-run later.
+
+## Provider keys and the proxy path
+
+No provider credential is committed, and none is needed to build, test or load
+the extension. Keys are entered by the user in Settings → AI and stored under
+`rose:secrets`, separate from settings, so exporting settings cannot leak one.
+
+- `viaProxy: true` means the backend holds the key: `AIClient` skips the
+  "no key" check and sends no `Authorization` header. This is the deployment
+  shape to prefer — Extension → backend → provider.
+- `requiresKey: false` is for a genuinely keyless endpoint (a local model, or the
+  test endpoint). Asking for a credential there would block a working provider.
+- Everything else fails fast with `AIError('no-key')` instead of sending an
+  unauthenticated request and reporting a confusing 401.
+
+`tests/core/ai-client.test.ts` pins all three: no-key on the proxy path, no
+`Authorization` header when there is no key, the header present when the gateway
+expects one, and the key never appearing in the URL or request body.
 
 ## Cross-origin iframe validation (`scripts/validation/phase6-iframe.mjs`)
 

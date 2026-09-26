@@ -133,6 +133,35 @@ translation request is now rejected before any call is made, and enabling AUTO
 answers the native confirmation dialog (the harness auto-accepts dialogs, since
 a blocking `confirm()` otherwise freezes the renderer and times out CDP).
 
+**The keyless test provider is not always available.** On 2026-09-26
+`text.pollinations.ai` returned HTTP 500 `ENOSPC: no space left on device, write`
+for every *uncached* completion (cached prompts still returned 200), then began
+returning 429/401. The failures were the provider's, not the extension's — the
+validation host had 61 GB free, and a direct `curl` reproduced the identical
+error. While it is down, Phase 5 scores 21/31: the memory, translation, error and
+latency checks pass, and the generation checks fail with the provider's own error
+message surfaced (which is itself the correct behaviour). Re-run once the
+provider recovers; no code change is needed.
+
+### Providers and keys
+
+ROSE ships **no** provider credential, and none is required for the extension to
+build, load or run its tests. A provider is configured in Settings → AI, where the
+key is entered by the user and stored under `rose:secrets` in
+`chrome.storage.local` — never in settings, never in the bundle.
+
+The supported shapes are: OpenRouter, any OpenAI-compatible endpoint (OpenAI,
+Groq, Gemini's OpenAI-compat endpoint, a self-hosted model), and a **proxy
+backend** (`viaProxy: true`, default `rose-backend` → `http://localhost:8787/v1`).
+The proxy shape is the one to use if you do not want a key in the browser at all:
+the backend holds it and the extension sends no `Authorization` header. The
+keyless `pollinations` entry is for testing the pipeline without a credential.
+
+A provider with `requiresKey: false` (or `viaProxy: true`) works with no local
+key; any other provider without one fails fast with `no-key` and a readable
+message rather than sending an unauthenticated request. These paths are pinned by
+`tests/core/ai-client.test.ts`.
+
 ### Live-site validation (Phase 4)
 
 `npm run verify:live` runs ROSE against real sites in a real Chromium with the

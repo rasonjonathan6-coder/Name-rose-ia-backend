@@ -370,3 +370,60 @@ describe('AIClient — cancellation', () => {
     expect(err.code).toBe('aborted');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Proxy path — the key never enters the extension
+// ---------------------------------------------------------------------------
+
+/**
+ * The documented deployment shape is Extension → backend → provider, where the
+ * backend holds the provider credential. These tests pin that contract: a proxy
+ * provider must work with no local key, and must not send an Authorization
+ * header it does not have (a stray empty/`Bearer undefined` header is a
+ * credential-leak class of bug that some gateways reject outright).
+ */
+describe('AIClient — proxy backend (key held server-side)', () => {
+  it('completes without a local key when viaProxy is set', async () => {
+    const base = await startServer((_req, res) => res.json(200, completion('proxied reply')));
+    const client = new AIClient(
+      async () => provider(base, { id: 'rose-backend', label: 'ROSE Backend', viaProxy: true, apiKey: '' }),
+      async () => '',
+    );
+
+    const result = await client.complete({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(result.text).toBe('proxied reply');
+  });
+
+  it('sends no Authorization header on the proxy path', async () => {
+    const base = await startServer((_req, res) => res.json(200, completion('ok')));
+    const client = new AIClient(
+      async () => provider(base, { viaProxy: true, apiKey: '' }),
+      async () => '',
+    );
+
+    await client.complete({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.authorization).toBeUndefined();
+  });
+
+  it('forwards a local key when one is configured even on the proxy path', async () => {
+    // A self-hosted gateway may still expect its own token.
+    const base = await startServer((_req, res) => res.json(200, completion('ok')));
+    const client = new AIClient(
+      async () => provider(base, { viaProxy: true }),
+      async () => 'gateway-token',
+    );
+
+    await client.complete({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(captured[0].headers.authorization).toBe('Bearer gateway-token');
+  });
+
+  it('never puts the key in the URL or the request body', async () => {
+    const base = await startServer((_req, res) => res.json(200, completion('ok')));
+    const client = new AIClient(async () => provider(base), async () => 'super-secret-key-123');
+
+    await client.complete({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(captured[0].url).not.toContain('super-secret-key-123');
+    expect(JSON.stringify(captured[0].body)).not.toContain('super-secret-key-123');
+  });
+});
