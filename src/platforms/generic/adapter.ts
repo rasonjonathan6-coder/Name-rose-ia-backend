@@ -309,6 +309,17 @@ export class GenericChatAdapter extends BaseAdapter {
     const structural = scored.find((c) => holdsMessages(c.el));
     if (structural) return { el: structural.el, hinted: true };
 
+    // An empty message log is a legitimate state (nobody has written yet), and it
+    // must still beat page chrome. Verified live on flirtify.com: the real log is
+    // `div._messagesWrapper_*` — empty until the first message — while a
+    // `ul._list_*` language picker outscored it on repeated-children structure
+    // alone and was reported as the client's conversation. A container that
+    // *declares* itself (role=log, aria-live, or a messages/chat class) is
+    // evidence ROSE should not discard just because it is currently empty, so it
+    // wins over an undeclared, merely list-shaped candidate.
+    const declared = scored.find((c) => this.isDeclaredContainer(c.el));
+    if (declared) return { el: declared.el, hinted: true };
+
     // Nothing on the page holds message-shaped children, so any container here is
     // a guess from layout alone. On a live marketing page that guess landed on the
     // language picker and the FAQ list, and ROSE reported page chrome as the
@@ -317,6 +328,19 @@ export class GenericChatAdapter extends BaseAdapter {
     const best = scored[0]!;
     if (!input || best.score < 0.6) return null;
     return { el: best.el, hinted: true };
+  }
+
+  /**
+   * True when the element names itself as a message log rather than merely
+   * looking like a list. Deliberately excludes the purely structural signals
+   * (scrollability, repeated children) that page chrome can also satisfy.
+   */
+  private isDeclaredContainer(el: Element): boolean {
+    if (el.getAttribute('role') === 'log' || el.getAttribute('aria-live')) return true;
+    const attr = [el.id, el.className?.toString(), el.getAttribute('data-testid'), el.getAttribute('aria-label')]
+      .filter(Boolean)
+      .join(' ');
+    return MESSAGE_CONTAINER_HINTS.test(attr);
   }
 
   /** Message-shaped elements inside a candidate container. */
@@ -645,10 +669,16 @@ export class GenericChatAdapter extends BaseAdapter {
       '[id*="display"][id*="name"]',
       '[id*="interlocutor"]',
       '[id*="companion"]',
-      'header h1',
-      'header h2',
+      // Chat-panel headings. The generic fallback needs these because a site can
+      // name the panel header by role alone; Flirtify's live chat header is
+      // `<p data-testid="chattingWith">`, which this covers.
+      '[data-testid*="chattingWith"]',
+      '[data-testid*="chatting-with"]',
       '[class*="chat"][class*="header"] h1',
       '[class*="chat"][class*="header"] h2',
+      '[class*="chat"][class*="header"] p',
+      'header h1',
+      'header h2',
       '[class*="user"][class*="name"]',
       '[class*="display"][class*="name"]',
     ]) {

@@ -724,6 +724,58 @@ describe('FlirtifyAdapter', () => {
     const messages = new FlirtifyAdapter().getMessages(document);
     expect(messages.map((m) => m.text)).toEqual(['Hello there']);
   });
+
+  // The two cases below encode what the live site actually serves (Phase 7,
+  // observed on https://flirtify.com/streams/<slug>). Both were wrong before.
+
+  it('reads the partner name from the chat panel, not a sidebar card', () => {
+    // Live shape: the panel header is `<p data-testid="chattingWith">`, while a
+    // "You may also like" sidebar lists other models as `h3`s. The old adapter
+    // matched a generic `[class*="name"]` and returned a sidebar model instead.
+    setUrl('https://flirtify.com/streams/megha_83');
+    document.body.innerHTML = `
+      <div class="sidebar">
+        <h3 class="card">Sabnam Yadav</h3>
+        <h3 class="card">Anne</h3>
+      </div>
+      <div id="chat">
+        <div class="chat-wrapper">
+          <p data-testid="chattingWith">Night Queen Megha</p>
+          <div class="messages-wrapper"></div>
+        </div>
+      </div>`;
+    const conv = new FlirtifyAdapter().getConversation(document);
+    expect(conv!.displayName).toBe('Night Queen Megha');
+    expect(conv!.clientId).toBe('megha_83');
+    expect(conv!.conversationId).toBe('flirtify-megha_83');
+  });
+
+  it('resolves a /streams/<slug> URL, not only /profile/<slug>', () => {
+    setUrl('https://flirtify.com/streams/elenakonetsky');
+    document.body.innerHTML = `
+      <p data-testid="chattingWith">Elena Konetsky</p>
+      <div class="messages-wrapper"></div>`;
+    const conv = new FlirtifyAdapter().getConversation(document);
+    expect(conv!.clientId).toBe('elenakonetsky');
+    expect(conv!.conversationId).toBe('flirtify-elenakonetsky');
+  });
+
+  it('picks the empty declared message log over a list-shaped language picker', () => {
+    // Live shape: the real log `div._messagesWrapper_*` is empty until the first
+    // message, while `ul._list_*` (the footer language picker) is a repeated-child
+    // list. The picker used to win and ROSE reported page chrome as the client's
+    // conversation.
+    setUrl('https://flirtify.com/streams/megha_83');
+    document.body.innerHTML = `
+      <ul class="_list_1dpqk_35">
+        <li>Report</li><li>Community rules</li><li>Privacy Policy</li><li>Terms of use</li>
+      </ul>
+      <div id="chat"><div class="_messagesWrapper_1407h_104"></div></div>`;
+    const adapter = new FlirtifyAdapter();
+    const container = adapter.getMessageContainer(document);
+    expect(container?.className).toContain('messagesWrapper');
+    expect(adapter.getMessages(document)).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

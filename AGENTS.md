@@ -209,19 +209,53 @@ Two harness rules, both learned the hard way:
 The mirror is keyed `tabId:frameId` in the background; the renderer only accepts a
 snapshot whose `fromFrameId` matches the `mirrorFor` it was told to mirror.
 
+## Phase 7 live recon (CooMeet + Flirtify)
+
+Real Chromium, built extension, public guest access only. What it established:
+
+- **CooMeet's chat needs a session.** `www.coomeet.com` is a marketing shell that
+  embeds `iframe.coomeet.com`. With no session the embedded app never boots: the
+  frame stays `about:blank`, so there is nothing to resolve. This is a gate, not a
+  selector bug — do not "fix" it by adding selectors. The adapter *is* chosen
+  correctly (`coomeet`, not `generic`), and the iframe gets a content script
+  (`all_frames: true` + `match_about_blank: false`, so about:blank is skipped).
+- **Flirtify exposes real chat DOM to a guest on `/streams/<slug>`.** This is why
+  Flirtify, unlike CooMeet, could be corrected from live evidence.
+
+Two Flirtify facts worth keeping, both confirmed live and encoded in tests:
+
+- **CSS-modules keep a stable middle token.** Classes are `_messagesWrapper_1407h_104`
+  — the trailing hash changes on every deploy but `messagesWrapper` does not.
+  Match with `[class*="messagesWrapper"]` (token), never the full class name.
+- **The partner name lives in the chat panel**, `<p data-testid="chattingWith">`.
+  It is *not* the profile heading, and it is *not* any `[class*="name"]`: a
+  "You may also like" sidebar full of other models matches those, which is how the
+  adapter returned "Sabnam Yadav" instead of "Night Queen Megha". Conversation URLs
+  are `/streams/<slug>`, not only `/profile/<slug>`.
+
+Generic-adapter rule this surfaced: an **empty** message log is a valid state and
+must beat list-shaped page chrome. Flirtify's real log is empty until the first
+message, so the structural pass finds nothing; the fallback then let the footer
+language picker (`ul._list_*`, a repeated-child list) win. `pickContainer` now
+prefers a *declared* container (role=log / aria-live / messages-chat class) before
+falling back to the score guess.
+
 ## Honesty requirement
 
 The user explicitly requires that features not be claimed as working unless
-verified. `README.md` carries the status table. CooMeet, Flirtify and the live
-call assistant are unit-tested against fixtures but were **never** verified
-against a live platform session — do not upgrade those rows without actually
-testing them.
+verified. `README.md` carries the status table. CooMeet and the live call
+assistant are unit-tested against fixtures and were probed live in Phase 7, but
+never driven in an authenticated session — do not upgrade those rows without
+actually testing them. Flirtify is verified live for detection, overlay, client
+name and message container; its insert/send path could not be (sign-in gate).
 
 Live validation did verify the generic path end to end on `web.libera.chat`
 (runtime activation → injection → overlay → composer detection → text insertion
-read back). CooMeet and Flirtify could not be verified because their chat
-requires an authenticated video session; their public pages are marketing pages
-with no chat DOM, and ROSE now correctly reports "no conversation" there.
+read back). CooMeet could not be verified because its chat requires an
+authenticated session; its public shell embeds `iframe.coomeet.com`, which never
+leaves `about:blank`, so ROSE correctly reports "no conversation" there. Flirtify
+was partially verified: a guest sees the real chat DOM on `/streams/<slug>`, which
+is what the Phase 7 corrections above are based on.
 
 What *is* verified for the CooMeet shape is the structural problem it presents —
 a chatless shell embedding a cross-origin chat frame — via Phase 6. That covers

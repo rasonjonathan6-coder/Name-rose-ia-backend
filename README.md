@@ -20,7 +20,7 @@ platform in a browser.
 | --- | --- | --- | --- |
 | Generic detector / heuristics | yes | yes (63 detection tests + 6-shape browser harness + live-site harness) | yes — resolves a real composer on web.libera.chat; correctly reports "no conversation" on chat-less pages |
 | Cross-origin iframe chat (CooMeet shape) | yes | yes (16 arbiter + 23 frame-role tests + Phase 6 browser harness) | yes on the harness — the shell's panel mirrors the chat frame's name, incoming message and suggestions, and inserts into the frame's composer |
-| Chat / message detection | yes | yes (E2E + adapter tests + 6-shape browser harness) | yes on the local demo harness; live pages tested had no chat DOM (see below) |
+| Chat / message detection | yes | yes (E2E + adapter tests + 6-shape browser harness) | yes on the local demo harness; live guest pages exposed no *messages* (CooMeet's chat never loads, Flirtify's log was empty — see Phase 7) |
 | Reply-field detection + text insertion | yes | yes (E2E insertion tests) | yes — text written into web.libera.chat's real composer and read back |
 | Runtime site activation (host grant + dynamic script) | yes | yes (popup-flow check) | yes — registers and injects on an arbitrary live origin |
 | AI generation (OpenAI-compatible / OpenRouter) | yes | yes (43 generation + 21 client tests) | yes — validated against a real keyless provider (Pollinations `gpt-oss-20b`), see Phase 5 |
@@ -30,14 +30,58 @@ platform in a browser.
 | Manual mode | yes | yes | yes |
 | Assisted mode | yes | yes | yes |
 | Auto mode | yes | yes | yes, but see the safety notes |
-| CooMeet adapter | yes | yes (adapter unit tests) | **not verified** — no live account used |
-| Flirtify adapter | yes | yes (adapter unit tests) | **not verified** — no live account used |
+| CooMeet adapter | yes | yes (adapter unit tests + live Phase 7 recon) | **not verified** — the chat only mounts behind the sign-in/consent gate; probed live and it stays `about:blank` |
+| Flirtify adapter | yes | yes (adapter unit tests + Phase 7 live recon) | **partially** — detection, overlay, client name and message container verified live; send/insert not verifiable (composer requires sign-in) |
 | Live call assistant (speech) | yes | yes (16 tests) | **not verified** — needs Chrome + a live call |
 
-The CooMeet, Flirtify and live-assistant rows are deliberately not claimed as
-working in production. Their adapters are unit-tested against representative DOM
-fixtures, but no live platform session was used to confirm them. Revenue
-figures are **not** displayed anywhere, because ROSE does not invent data.
+The CooMeet and live-assistant rows are deliberately not claimed as working in
+production. Their adapters are unit-tested against representative DOM fixtures,
+and Phase 7 probed both sites live, but no authenticated session was available:
+CooMeet's chat iframe never leaves `about:blank` and Flirtify's composer is
+gated behind sign-in. Revenue figures are **not** displayed anywhere, because
+ROSE does not invent data.
+
+Flirtify is the one platform where live probing produced verified corrections,
+because its public stream pages expose the real chat DOM to a guest:
+
+- detection picks `flirtify` (not `generic`), and the overlay mounts once;
+- the partner name now resolves from the chat panel's `data-testid="chattingWith"`
+  — it previously returned an unrelated sidebar model ("Sabnam Yadav" instead of
+  "Night Queen Megha");
+- `/streams/<slug>` is recognised as a conversation URL (only `/profile/<slug>`
+  was);
+- the message container now resolves to the real log `div._messagesWrapper_*`
+  instead of a list-shaped language picker.
+
+See "Phase 7 live recon" below for the exact evidence and what remains unproven.
+
+### Phase 7 live recon (no authenticated session available)
+
+Both sites were probed in a real Chromium with the built extension loaded, using
+only public guest access — no credentials were requested, logged or stored.
+
+| Observation | CooMeet | Flirtify |
+| --- | --- | --- |
+| Reachable | yes | yes |
+| Adapter chosen | `coomeet` (correct, not `generic`) | `flirtify` (correct, not `generic`) |
+| Overlay mounted | no — nothing to render yet | yes, exactly one |
+| Chat accessible to a guest | no | yes, on `/streams/<slug>` |
+| Client name | n/a | **yes** — "Night Queen Megha" |
+| Message container | n/a | **yes** — `div._messagesWrapper_*` |
+| Reply composer | no | no — gated behind "Sign up" |
+| Insert / Send | not testable | not testable |
+
+CooMeet serves a marketing shell on `www.coomeet.com` that embeds
+`iframe.coomeet.com`. With no session the embedded app never loads: the frame
+stays `about:blank` and offers no textareas, no contenteditable and no composer.
+That is a **gate**, not a selector problem — the iframe's own document is empty,
+so there is nothing for any adapter to resolve.
+
+**Why CooMeet/Flirtify chat and the live-call assistant are still not claimed as
+verified:** they need an authenticated session (and for the assistant, a live
+call). If you can supply an authenticated browser profile, the remaining checks —
+message detection, Generate, Insert, Send, conversation switch, SPA reload — can
+be run against the real platforms.
 
 ### Real-provider validation (Phase 5)
 

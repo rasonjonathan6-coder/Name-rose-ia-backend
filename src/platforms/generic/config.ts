@@ -54,12 +54,20 @@ export const COOMEET_CONFIG: SiteConfig = {
 
 export const FLIRTIFY_CONFIG: SiteConfig = {
   hosts: ['flirtify.com'],
+  // Verified against the live site. Flirtify is a Vue SPA whose styles are
+  // CSS-modules: the hash changes on every deploy but the semantic token in the
+  // middle (`_messagesWrapper_1407h_104`) is stable. Matching the token with
+  // `[class*=…]` is therefore the durable choice — a full class name would break
+  // on the next release.
+  //
+  // The real log is `div._messagesWrapper_*`, confirmed by DOM inspection. It is
+  // the only element that grows with the conversation.
   messageContainer: [
+    '[class*="messagesWrapper"]',
     '[data-testid="messages"]',
     '[class*="chat__messages"]',
     '[class*="chat-messages"]',
     '[class*="messageList"]',
-    '[class*="conversation"]',
   ],
   incomingMessage: [
     '[data-testid="msg-incoming"]',
@@ -73,6 +81,9 @@ export const FLIRTIFY_CONFIG: SiteConfig = {
     '[class*="message"][class*="outgoing"]',
     '[class*="message"][class*="right"]',
   ],
+  // NOTE: no `author` here on purpose. `SiteConfig.author` is the per-message
+  // author label *inside a bubble*; Flirtify's partner name is a panel-level
+  // element, so it is resolved in FlirtifyAdapter.getConversation instead.
   input: [
     'textarea[data-testid="chat-input"]',
     'textarea[class*="chat-input"]',

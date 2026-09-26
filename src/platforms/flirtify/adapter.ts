@@ -39,16 +39,27 @@ export class FlirtifyAdapter extends GenericChatAdapter {
     return Math.min(1, base + (hasShell ? 0.2 : 0.05));
   }
 
-  /** Flirtify URLs look like /profile/<slug> or /chat/<id>. */
+  /**
+   * Flirtify serves a chat at `/streams/<slug>` and profile pages at
+   * `/shorts/<slug>`; older builds used `/profile/<slug>` or `/chat/<id>`.
+   * The slug is what changes when the conversation does, so it is the identity
+   * key. Verified live against all three stream pages probed in Phase 7.
+   */
   override getConversation(doc: Document) {
     const base = super.getConversation(doc);
     if (!base) return null;
 
     const href = documentUrl(doc).href;
-    const slug = href.match(/\/(?:profile|model|chat|room|user)\/([A-Za-z0-9_-]{2,})/i)?.[1];
-    const nameEl = doc.querySelector(
-      '[data-testid*="profile-name"], [class*="profile"][class*="name"], [class*="model"][class*="name"], [class*="nickname"]',
-    );
+    const slug = href.match(/\/(?:streams|shorts|profile|model|chat|room|user)\/([A-Za-z0-9_-]{2,})/i)?.[1];
+    // `chattingWith` is the name rendered in the chat panel itself, which is the
+    // conversation actually open. `displayName` is the profile heading and also
+    // exists on chat-less pages, so it is the fallback.
+    const nameEl =
+      doc.querySelector('[data-testid="chattingWith"]') ??
+      doc.querySelector('[data-testid="displayName"]') ??
+      doc.querySelector(
+        '[data-testid*="profile-name"], [class*="profile"][class*="name"], [class*="model"][class*="name"], [class*="nickname"]',
+      );
     const displayName = normaliseText(nameEl?.textContent ?? '') || base.displayName;
     const clientId = slug || base.clientId;
 
