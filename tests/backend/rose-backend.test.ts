@@ -284,6 +284,51 @@ describe('ROSE backend — failures', () => {
 });
 
 // ---------------------------------------------------------------------------
+// CORS allowlist
+// ---------------------------------------------------------------------------
+
+describe('ROSE backend — ALLOWED_ORIGINS', () => {
+  it('echoes an allowed origin instead of *', async () => {
+    const up = await startUpstream(200, COMPLETION);
+    const base = await startBackend({
+      OPENROUTER_API_KEY: TEST_KEY,
+      OPENROUTER_BASE_URL: up,
+      ALLOWED_ORIGINS: 'chrome-extension://abc,https://rose.example',
+    });
+
+    const res = await fetch(`${base}/health`, { headers: { origin: 'https://rose.example' } });
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://rose.example');
+  });
+
+  it('omits the CORS header for an origin that is not allowed', async () => {
+    const up = await startUpstream(200, COMPLETION);
+    const base = await startBackend({
+      OPENROUTER_API_KEY: TEST_KEY,
+      OPENROUTER_BASE_URL: up,
+      ALLOWED_ORIGINS: 'https://rose.example',
+    });
+
+    const res = await fetch(`${base}/health`, { headers: { origin: 'https://evil.example' } });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    expect(res.headers.get('vary')).toBe('origin');
+  });
+
+  it('still serves the request body to a disallowed origin (CORS is browser-enforced)', async () => {
+    // The server does not block the request; it declines to authorise the
+    // browser to read the response. Worth pinning so the behaviour is known.
+    const up = await startUpstream(200, COMPLETION);
+    const base = await startBackend({
+      OPENROUTER_API_KEY: TEST_KEY,
+      OPENROUTER_BASE_URL: up,
+      ALLOWED_ORIGINS: 'https://rose.example',
+    });
+
+    const res = await fetch(`${base}/health`, { headers: { origin: 'https://evil.example' } });
+    expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Log hygiene
 // ---------------------------------------------------------------------------
 

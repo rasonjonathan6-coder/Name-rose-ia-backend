@@ -45,6 +45,30 @@ spend your credits. With it, the extension sends the token as the `Authorization
 header and the backend swaps it for the real provider key, which the client never
 sees.
 
+### About `ALLOWED_ORIGINS`
+
+ROSE calls the provider from the **service worker**
+(`src/background/index.ts`), and a cross-origin fetch from an extension sends an
+`Origin` header — so the backend must authorise it or the browser blocks the
+response.
+
+**Leave the default `*`.** An extension sends no cookies, and the endpoint is
+guarded by `ROSE_BACKEND_TOKEN`, so `*` gives nothing away. This is the
+recommended setting.
+
+An allowlist is possible but awkward: the value must be
+`chrome-extension://<extension-id>`, **not** `https://`. The manifest ships no
+`key`, so Chrome derives the id from the extension's absolute install path — it
+is stable on one machine and different on the next. Read yours from
+`chrome://extensions` (Developer mode) rather than guessing, and expect to update
+the allowlist whenever the install path changes.
+
+An origin that is not listed gets no `access-control-allow-origin` header, so the
+browser refuses to read the response. Note this is CORS, which is
+browser-enforced: the server still processes the request, so `ALLOWED_ORIGINS` is
+a browser-side guard, not an access control. `ROSE_BACKEND_TOKEN` is the access
+control.
+
 ## Endpoints
 
 | Method | Path | Purpose |
