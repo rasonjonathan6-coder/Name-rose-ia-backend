@@ -154,13 +154,29 @@ The supported shapes are: OpenRouter, any OpenAI-compatible endpoint (OpenAI,
 Groq, Gemini's OpenAI-compat endpoint, a self-hosted model), and a **proxy
 backend** (`viaProxy: true`, default `rose-backend` → `http://localhost:8787/v1`).
 The proxy shape is the one to use if you do not want a key in the browser at all:
-the backend holds it and the extension sends no `Authorization` header. The
-keyless `pollinations` entry is for testing the pipeline without a credential.
+the backend holds it and the extension sends no `Authorization` header. That
+backend is included — see [`backend/README.md`](backend/README.md). Run it with
+`npm run backend`; it needs only `OPENROUTER_API_KEY` in its environment and has
+no dependencies. The keyless `pollinations` entry is for testing the pipeline
+without a credential.
 
 A provider with `requiresKey: false` (or `viaProxy: true`) works with no local
 key; any other provider without one fails fast with `no-key` and a readable
 message rather than sending an unauthenticated request. These paths are pinned by
 `tests/core/ai-client.test.ts`.
+
+### Proxy validation (Phase 7)
+
+`node scripts/validation/phase7-proxy.mjs` drives the real `backend/rose-backend.mjs`
+process against the local mock provider, with a **dummy** credential that grants
+nothing, and asserts the whole chain: extension → backend → provider. 21/21
+checks pass, covering a generation that returns three suggestions; the backend
+attaching the credential upstream while the extension sends none; the credential
+absent from extension storage, the page, the backend log and `/health`; a
+provider 429 surfacing as a typed error; an unreachable backend failing cleanly
+instead of hanging; recovery once the backend is back; and a backend with no
+credential refusing with `503` rather than forwarding. It is part of
+`npm run verify:browser`.
 
 ### Live-site validation (Phase 4)
 

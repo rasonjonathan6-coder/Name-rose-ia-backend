@@ -24,6 +24,7 @@ const PHASES = [
   'phase2-generic.mjs',
   'phase3-demo.mjs',
   'phase6-iframe.mjs',
+  'phase7-proxy.mjs',
   'check-popup-flow.mjs',
 ];
 

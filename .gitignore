@@ -10,3 +10,6 @@ coverage/
 # must never be committed.
 .env
 .env.*
+
+# Release artifacts are built, not committed.
+ROSE-IA-extension-*.zip

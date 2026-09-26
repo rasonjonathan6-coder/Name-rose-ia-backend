@@ -20,6 +20,13 @@ const PLATFORM_MATCHES = [
 ];
 
 export function buildManifest({ prod = false } = {}) {
+  // The proxy backend's origin can be declared at build time so the extension
+  // can call it without a runtime permission prompt. It is not a secret — a
+  // public endpoint URL — but it is optional: the backend answers permissive
+  // CORS, so a cross-origin fetch works even without this.
+  const backendOrigin = process.env.ROSE_BACKEND_ORIGIN?.trim().replace(/\/+$/, '') ?? '';
+  const backendHostPattern = backendOrigin ? `${backendOrigin}/*` : null;
+
   return {
     manifest_version: 3,
     name: EXTENSION_NAME,
@@ -48,23 +55,26 @@ export function buildManifest({ prod = false } = {}) {
     // access at runtime.
     permissions: ['storage', 'scripting', 'tabs', 'notifications', 'alarms', 'permissions'],
     optional_host_permissions: ['https://*/*', 'http://*/*'],
-    host_permissions: prod
-      ? [
-          'https://api.openai.com/*',
-          'https://openrouter.ai/*',
-          'https://api.groq.com/*',
-          'https://generativelanguage.googleapis.com/*',
-          'https://text.pollinations.ai/*',
-        ]
-      : [
-          'https://api.openai.com/*',
-          'https://openrouter.ai/*',
-          'https://api.groq.com/*',
-          'https://generativelanguage.googleapis.com/*',
-          'https://text.pollinations.ai/*',
-          'http://localhost/*',
-          'http://127.0.0.1/*',
-        ],
+    host_permissions: [
+      ...(prod
+        ? [
+            'https://api.openai.com/*',
+            'https://openrouter.ai/*',
+            'https://api.groq.com/*',
+            'https://generativelanguage.googleapis.com/*',
+            'https://text.pollinations.ai/*',
+          ]
+        : [
+            'https://api.openai.com/*',
+            'https://openrouter.ai/*',
+            'https://api.groq.com/*',
+            'https://generativelanguage.googleapis.com/*',
+            'https://text.pollinations.ai/*',
+            'http://localhost/*',
+            'http://127.0.0.1/*',
+          ]),
+      ...(backendHostPattern ? [backendHostPattern] : []),
+    ],
     content_scripts: [
       {
         matches: PLATFORM_MATCHES,

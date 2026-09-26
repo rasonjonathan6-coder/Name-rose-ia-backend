@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
+    "backend": "node backend/rose-backend.mjs",
     "demo": "npm run build && node scripts/serve-demo.mjs",
     "verify": "npm run typecheck && npm run test && npm run build",
     "verify:browser": "node scripts/validation/run-all.mjs",
