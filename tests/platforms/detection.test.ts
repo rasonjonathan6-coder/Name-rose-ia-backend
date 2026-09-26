@@ -1,0 +1,723 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { PlatformDetector, matchHost } from '@/platforms/detector';
+import { documentUrl } from '@/platforms/types';
+import { GenericChatAdapter } from '@/platforms/generic/adapter';
+import { DEMO_CONFIG, COOMEET_CONFIG, FLIRTIFY_CONFIG } from '@/platforms/generic/config';
+import { DemoAdapter } from '@/platforms/generic/demo-adapter';
+import { CooMeetAdapter } from '@/platforms/coomeet/adapter';
+import { FlirtifyAdapter } from '@/platforms/flirtify/adapter';
+
+/**
+ * These tests build real DOM fixtures in jsdom and run the actual heuristics.
+ * jsdom does not do layout, so geometry-dependent scoring is stubbed via
+ * `getBoundingClientRect` on the fixtures — that is the one place a stub is
+ * unavoidable, and it is stubbing the *browser*, not our own code.
+ */
+
+/** Gives an element a fake box so geometry heuristics have something to read. */
+function setRect(el: Element, rect: { top: number; left: number; width: number; height: number }): void {
+  (el as HTMLElement).getBoundingClientRect = () => ({
+    top: rect.top,
+    left: rect.left,
+    right: rect.left + rect.width,
+    bottom: rect.top + rect.height,
+    width: rect.width,
+    height: rect.height,
+    x: rect.left,
+    y: rect.top,
+    toJSON: () => ({}),
+  }) as DOMRect;
+}
+
+/**
+ * Points the document at a URL.
+ *
+ * Only `window.location` is replaced: `document.location` is a non-configurable
+ * accessor in jsdom, and production code resolves the URL through the browsing
+ * context (`documentUrl`) precisely so a single substitution is enough.
+ */
+function setUrl(href: string): void {
+  const url = new URL(href);
+  Object.defineProperty(window, 'location', { value: url, writable: true, configurable: true });
+  expect(documentUrl(document).href).toBe(url.href);
+}
+
+beforeEach(() => {
+  document.body.innerHTML = '';
+  setUrl('https://example.com/');
+});
+
+// ---------------------------------------------------------------------------
+// Host matching
+// ---------------------------------------------------------------------------
+
+describe('matchHost', () => {
+  it('matches exact hosts', () => {
+    expect(matchHost('coomeet.com', 'coomeet.com')).toBe(true);
+    expect(matchHost('coomeet.com', 'flirtify.com')).toBe(false);
+  });
+
+  it('matches subdomains for a wildcard pattern', () => {
+    expect(matchHost('www.coomeet.com', '*.coomeet.com')).toBe(true);
+    expect(matchHost('app.coomeet.com', '*.coomeet.com')).toBe(true);
+  });
+
+  it('does not match a suffix that is not a subdomain boundary', () => {
+    expect(matchHost('notcoomeet.com', 'coomeet.com')).toBe(false);
+    expect(matchHost('evil-coomeet.com', '*.coomeet.com')).toBe(false);
+  });
+
+  it('is case-insensitive', () => {
+    expect(matchHost('CooMeet.com', 'coomeet.com')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generic adapter — input detection
+// ---------------------------------------------------------------------------
+
+describe('GenericChatAdapter — reply field detection', () => {
+  it('finds a textarea with a message placeholder', () => {
+    document.body.innerHTML = `
+      <div id="chat">
+        <div class="messages"><div>Hello</div></div>
+        <textarea placeholder="Type your message…"></textarea>
+      </div>`;
+    const adapter = new GenericChatAdapter();
+    const input = adapter.getInput(document);
+    expect(input?.tagName).toBe('TEXTAREA');
+  });
+
+  it('finds a contenteditable editor', () => {
+    document.body.innerHTML = `
+      <div class="messages"><div>Hello</div></div>
+      <div contenteditable="true" role="textbox" aria-label="Message"></div>`;
+    const adapter = new GenericChatAdapter();
+    expect(adapter.getInput(document)?.getAttribute('contenteditable')).toBe('true');
+  });
+
+  it('finds a plain text input with an aria-label', () => {
+    document.body.innerHTML = `
+      <div class="messages"><div>Hello</div></div>
+      <input type="text" aria-label="Write a message" />`;
+    expect(new GenericChatAdapter().getInput(document)?.tagName).toBe('INPUT');
+  });
+
+  it('ignores a search box', () => {
+    document.body.innerHTML = `
+      <input type="search" placeholder="Search conversations" />
+      <textarea placeholder="Type a message"></textarea>`;
+    const input = new GenericChatAdapter().getInput(document);
+    expect(input?.tagName).toBe('TEXTAREA');
+    expect(input?.getAttribute('placeholder')).toContain('message');
+  });
+
+  it('ignores a disabled field', () => {
+    document.body.innerHTML = `
+      <textarea placeholder="message" disabled></textarea>
+      <textarea placeholder="Type your message"></textarea>`;
+    const input = new GenericChatAdapter().getInput(document) as HTMLTextAreaElement;
+    expect(input.disabled).toBe(false);
+  });
+
+  it('ignores a login form field', () => {
+    document.body.innerHTML = `
+      <input type="text" name="username" placeholder="Username" />
+      <textarea placeholder="Your message"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.tagName).toBe('TEXTAREA');
+  });
+
+  it('returns null when there is no plausible field', () => {
+    document.body.innerHTML = `<div>Just some text</div>`;
+    expect(new GenericChatAdapter().getInput(document)).toBeNull();
+  });
+
+  it('never returns ROSE\'s own UI as the reply field', () => {
+    document.body.innerHTML = `
+      <div id="rose-shadow-host"></div>
+      <textarea placeholder="Type your message"></textarea>`;
+    const input = new GenericChatAdapter().getInput(document);
+    expect(input?.closest('#rose-shadow-host')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generic adapter — container and messages
+// ---------------------------------------------------------------------------
+
+describe('GenericChatAdapter — message container detection', () => {
+  it('finds a scrollable list of repeated bubbles', () => {
+    document.body.innerHTML = `
+      <div id="chat">
+        <div class="chat-messages" role="log" style="overflow-y:auto">
+          <div class="bubble">one</div><div class="bubble">two</div><div class="bubble">three</div>
+        </div>
+        <textarea placeholder="message"></textarea>
+      </div>`;
+    const adapter = new GenericChatAdapter();
+    const container = adapter.getMessageContainer(document);
+    expect(container?.className).toContain('chat-messages');
+  });
+
+  it('prefers a container with role=log', () => {
+    document.body.innerHTML = `
+      <div class="wrapper">
+        <div class="inner" role="log"><div>a</div><div>b</div><div>c</div></div>
+        <div class="other"><div>x</div><div>y</div><div>z</div></div>
+      </div>
+      <textarea placeholder="message"></textarea>`;
+    const container = new GenericChatAdapter().getMessageContainer(document);
+    expect(container?.getAttribute('role')).toBe('log');
+  });
+});
+
+describe('GenericChatAdapter — message extraction', () => {
+  it('extracts messages with text', () => {
+    document.body.innerHTML = `
+      <div class="messages">
+        <div class="msg incoming">Hello there</div>
+        <div class="msg outgoing">Hi back</div>
+        <div class="msg incoming">How are you?</div>
+      </div>
+      <textarea placeholder="message"></textarea>`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages.map((m) => m.text)).toEqual(['Hello there', 'Hi back', 'How are you?']);
+  });
+
+  it('classifies direction from class hints', () => {
+    document.body.innerHTML = `
+      <div class="messages">
+        <div class="message incoming">from them</div>
+        <div class="message outgoing">from me</div>
+      </div>
+      <textarea placeholder="message"></textarea>`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages.find((m) => m.text === 'from them')!.direction).toBe('incoming');
+    expect(messages.find((m) => m.text === 'from me')!.direction).toBe('outgoing');
+  });
+
+  it('never treats the composer as a message', () => {
+    document.body.innerHTML = `
+      <div class="messages"><div class="msg incoming">Hello</div></div>
+      <textarea placeholder="message">draft text in composer</textarea>`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages.some((m) => m.text.includes('draft text'))).toBe(false);
+  });
+
+  it('produces stable keys for identical content', () => {
+    document.body.innerHTML = `
+      <div class="messages"><div class="msg incoming">Same text</div></div>
+      <textarea placeholder="message"></textarea>`;
+    const adapter = new GenericChatAdapter();
+    const first = adapter.getMessages(document);
+    const second = adapter.getMessages(document);
+    expect(first[0]!.key).toBe(second[0]!.key);
+  });
+
+  it('uses a native id when the DOM provides one', () => {
+    document.body.innerHTML = `
+      <div class="messages"><div class="msg incoming" data-message-id="m-42">Hello</div></div>
+      <textarea placeholder="message"></textarea>`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages[0]!.key).toBe('m-42');
+    expect(messages[0]!.nativeId).toBe('m-42');
+  });
+
+  it('extracts an author when present', () => {
+    document.body.innerHTML = `
+      <div class="messages">
+        <div class="msg incoming" data-author="Sophie"><span class="author">Sophie</span>Hello</div>
+      </div>
+      <textarea placeholder="message"></textarea>`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages[0]!.author).toBe('Sophie');
+  });
+
+  it('skips empty bubbles', () => {
+    document.body.innerHTML = `
+      <div class="messages">
+        <div class="msg incoming"></div>
+        <div class="msg incoming">real message</div>
+      </div>
+      <textarea placeholder="message"></textarea>`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages.map((m) => m.text)).toEqual(['real message']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions found by the browser harness (scripts/validation/phase2-generic.mjs)
+// ---------------------------------------------------------------------------
+
+describe('GenericChatAdapter — regressions caught in a real browser', () => {
+  it('reads messages out of a table-based log', () => {
+    // Fixture C. Legacy widgets put each message in a <tr><td>; `directText` did
+    // not consider <td>, so the row looked textless and the client's only
+    // message was invisible to ROSE.
+    document.body.innerHTML = `
+      <table class="log" id="log" role="log">
+        <tbody id="log-body">
+          <tr class="msg in" data-message-id="c-1"><td>Hello! Where are you from?</td></tr>
+        </tbody>
+      </table>
+      <input type="text" id="composer" placeholder="Say something" />`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages.map((m) => m.text)).toEqual(['Hello! Where are you from?']);
+    expect(messages[0]!.direction).toBe('incoming');
+  });
+
+  it('classifies "msg in" / "msg out" from individual class tokens', () => {
+    // Fixture D. Joined into one string, "msg in" also matches `me` and `own`
+    // from OUTGOING_HINTS, so every client message was labelled as ours.
+    document.body.innerHTML = `
+      <div class="log" id="log" role="log">
+        <div class="msg in" data-message-id="d-1">from them</div>
+        <div class="msg out" data-message-id="d-2">from me</div>
+      </div>
+      <textarea id="composer" placeholder="Message"></textarea>`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages.find((m) => m.text === 'from them')!.direction).toBe('incoming');
+    expect(messages.find((m) => m.text === 'from me')!.direction).toBe('outgoing');
+  });
+
+  it('finds an empty message log and reports no messages', () => {
+    // Fixture D at load: the log exists but has no children yet. It was skipped
+    // by container scoring, so a decorative header chip won and was reported as
+    // the client's message.
+    document.body.innerHTML = `
+      <div class="page">
+        <header>
+          <span class="who">Yuki</span>
+          <span class="tag">fixture D · dynamic, virtualised</span>
+        </header>
+        <div class="log" id="log" role="log" aria-live="polite"></div>
+        <div class="composer">
+          <textarea id="composer" placeholder="Message…"></textarea>
+          <button class="send" aria-label="Send">Send</button>
+        </div>
+      </div>`;
+    const adapter = new GenericChatAdapter();
+    expect(adapter.getMessageContainer(document)?.id).toBe('log');
+    expect(adapter.getMessages(document)).toEqual([]);
+  });
+
+  it('detects messages injected after load', () => {
+    document.body.innerHTML = `
+      <div class="log" id="log" role="log"></div>
+      <textarea id="composer" placeholder="Message…"></textarea>`;
+    const adapter = new GenericChatAdapter();
+    expect(adapter.getMessages(document)).toEqual([]);
+
+    const bubble = document.createElement('div');
+    bubble.className = 'msg in';
+    bubble.dataset.messageId = 'd-1';
+    bubble.textContent = 'Are you there?';
+    document.getElementById('log')!.appendChild(bubble);
+
+    expect(adapter.getMessages(document).map((m) => m.text)).toEqual(['Are you there?']);
+  });
+
+  it('never treats toolbar buttons inside the message list as messages', () => {
+    document.body.innerHTML = `
+      <div class="log" id="log" role="log">
+        <div class="msg in" data-message-id="d-1">hello</div>
+        <div class="composer-actions"><button class="send-button">Send</button></div>
+      </div>
+      <textarea id="composer" placeholder="Message…"></textarea>`;
+    const texts = new GenericChatAdapter().getMessages(document).map((m) => m.text);
+    expect(texts).toEqual(['hello']);
+  });
+
+  it('excludes timestamps from the message text', () => {
+    // Fixture A. The timestamp span was concatenated into the message, so the
+    // model was asked to answer "10:02".
+    document.body.innerHTML = `
+      <div class="log" id="log" role="log">
+        <div class="msg in" data-message-id="a-1">Hey there! How is your day going?<span class="meta">10:02</span></div>
+      </div>
+      <textarea placeholder="message"></textarea>`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages[0]!.text).toBe('Hey there! How is your day going?');
+  });
+
+  it('keeps the container decision across repeated reads', () => {
+    // The input cache refresh dropped the `hinted` flag, so after the first
+    // resolution ROSE forgot its container and leaked page chrome as messages.
+    document.body.innerHTML = `
+      <div class="page">
+        <header><span class="tag">fixture D · dynamic, virtualised</span></header>
+        <div class="log" id="log" role="log"></div>
+        <textarea id="composer" placeholder="Message…"></textarea>
+      </div>`;
+    const adapter = new GenericChatAdapter();
+    for (let i = 0; i < 5; i++) {
+      adapter.getMessages(document);
+      adapter.getInput(document);
+      adapter.getMessageContainer(document);
+    }
+    expect(adapter.getMessages(document)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generic adapter — conversation identity
+// ---------------------------------------------------------------------------
+
+describe('GenericChatAdapter — conversation identity', () => {
+  it('derives a stable clientId for the same page', () => {
+    document.body.innerHTML = `
+      <header><h1>Sophie</h1></header>
+      <div class="messages"><div class="msg incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+    const adapter = new GenericChatAdapter();
+    const a = adapter.getConversation(document);
+    const b = adapter.getConversation(document);
+    expect(a).not.toBeNull();
+    expect(a!.clientId).toBe(b!.clientId);
+    expect(a!.id).toBe(`${a!.platform}:${a!.clientId}`);
+  });
+
+  it('prefers an explicit data-user-id', () => {
+    document.body.innerHTML = `
+      <div data-user-id="u-9911"><h1>Sophie</h1></div>
+      <div class="messages"><div class="msg incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+    expect(new GenericChatAdapter().getConversation(document)!.clientId).toBe('u-9911');
+  });
+
+  it('reads the client id from the URL when the DOM has none', () => {
+    setUrl('https://example.com/chat/user/abcd1234');
+    document.body.innerHTML = `
+      <div class="messages"><div class="msg incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+    expect(new GenericChatAdapter().getConversation(document)!.clientId).toBe('abcd1234');
+  });
+
+  it('returns null when there is no conversation on the page', () => {
+    document.body.innerHTML = `<div>Nothing here</div>`;
+    expect(new GenericChatAdapter().getConversation(document)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generic adapter — writing
+// ---------------------------------------------------------------------------
+
+describe('GenericChatAdapter — text insertion', () => {
+  it('writes into a textarea and fires input events', () => {
+    document.body.innerHTML = `<textarea placeholder="message"></textarea>`;
+    const input = document.querySelector('textarea') as HTMLTextAreaElement;
+    let inputFired = false;
+    input.addEventListener('input', () => {
+      inputFired = true;
+    });
+
+    const ok = new GenericChatAdapter().insertText(input, 'Hello there');
+    expect(ok).toBe(true);
+    expect(input.value).toBe('Hello there');
+    expect(inputFired).toBe(true);
+  });
+
+  it('writes into a contenteditable element', () => {
+    document.body.innerHTML = `<div contenteditable="true" aria-label="message"></div>`;
+    const el = document.querySelector('[contenteditable]') as HTMLElement;
+    const ok = new GenericChatAdapter().insertText(el, 'Hello there');
+    expect(ok).toBe(true);
+    expect(el.textContent).toBe('Hello there');
+  });
+
+  it('finds a send button by aria-label', () => {
+    document.body.innerHTML = `
+      <div class="composer">
+        <textarea placeholder="message"></textarea>
+        <button aria-label="Send message">➤</button>
+      </div>`;
+    const button = new GenericChatAdapter().getSendButton(document);
+    expect(button?.getAttribute('aria-label')).toContain('Send');
+  });
+
+  it('finds a send button by visible text', () => {
+    document.body.innerHTML = `
+      <div class="composer"><textarea placeholder="message"></textarea><button>Send</button></div>`;
+    expect(new GenericChatAdapter().getSendButton(document)?.textContent).toBe('Send');
+  });
+
+  it('falls back to Enter when no send button exists', async () => {
+    document.body.innerHTML = `<textarea placeholder="message"></textarea>`;
+    const input = document.querySelector('textarea') as HTMLTextAreaElement;
+    let enterPressed = false;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') enterPressed = true;
+    });
+
+    const ok = await new GenericChatAdapter().send(input);
+    expect(ok).toBe(true);
+    expect(enterPressed).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Demo adapter (the E2E path)
+// ---------------------------------------------------------------------------
+
+describe('DemoAdapter', () => {
+  beforeEach(() => {
+    setUrl('http://localhost:5173/demo/demo.html');
+    document.body.innerHTML = `
+      <div id="demo-messages">
+        <div class="msg" data-dir="in" data-message-id="m1">Hi! How are you?</div>
+        <div class="msg" data-dir="out" data-message-id="m2">Good thanks</div>
+        <div class="msg" data-dir="in" data-message-id="m3">Where are you from?</div>
+      </div>
+      <textarea id="demo-input"></textarea>
+      <button id="demo-send">Send</button>`;
+  });
+
+  it('scores 1.0 on the demo page', () => {
+    expect(new DemoAdapter().score(document)).toBe(1);
+  });
+
+  it('does not claim non-localhost hosts', () => {
+    setUrl('https://coomeet.com/chat');
+    expect(new DemoAdapter().score(document)).toBe(0);
+  });
+
+  it('detects messages with correct directions', () => {
+    const messages = new DemoAdapter().getMessages(document);
+    expect(messages.map((m) => m.text)).toEqual(['Hi! How are you?', 'Good thanks', 'Where are you from?']);
+    expect(messages.map((m) => m.direction)).toEqual(['incoming', 'outgoing', 'incoming']);
+  });
+
+  it('resolves the container, input and send button', () => {
+    const adapter = new DemoAdapter();
+    expect(adapter.getMessageContainer(document)?.id).toBe('demo-messages');
+    expect(adapter.getInput(document)?.id).toBe('demo-input');
+    expect(adapter.getSendButton(document)?.id).toBe('demo-send');
+  });
+
+  it('inserts text into the demo input', () => {
+    const adapter = new DemoAdapter();
+    const input = adapter.getInput(document)!;
+    expect(adapter.insertText(input, 'Hello from ROSE')).toBe(true);
+    expect((input as HTMLTextAreaElement).value).toBe('Hello from ROSE');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Platform adapters
+// ---------------------------------------------------------------------------
+
+describe('CooMeetAdapter', () => {
+  it('matches coomeet hosts including subdomains', () => {
+    const a = new CooMeetAdapter();
+    expect(a.matches(new URL('https://coomeet.com/chat'))).toBe(true);
+    expect(a.matches(new URL('https://www.coomeet.com/'))).toBe(true);
+    expect(a.matches(new URL('https://flirtify.com/'))).toBe(false);
+  });
+
+  it('keys conversation identity off the partner id, not the URL', () => {
+    setUrl('https://coomeet.com/chat');
+    document.body.innerHTML = `
+      <div class="video-chat" data-partner-id="partner-77">
+        <div class="partner-name">Anna</div>
+      </div>
+      <div class="chat-messages"><div class="message incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+    const conv = new CooMeetAdapter().getConversation(document);
+    expect(conv!.clientId).toBe('partner-77');
+    expect(conv!.conversationId).toBe('coomeet-partner-77');
+    expect(conv!.displayName).toBe('Anna');
+  });
+
+  it('filters typing indicators and placeholders out of the message list', () => {
+    setUrl('https://coomeet.com/chat');
+    document.body.innerHTML = `
+      <div class="chat-messages">
+        <div class="message incoming">Real message</div>
+        <div class="message incoming system">is typing</div>
+        <div class="message incoming">Stranger</div>
+        <div class="message incoming">...</div>
+      </div>
+      <textarea placeholder="message"></textarea>`;
+    const messages = new CooMeetAdapter().getMessages(document);
+    expect(messages.map((m) => m.text)).toEqual(['Real message']);
+  });
+});
+
+describe('FlirtifyAdapter', () => {
+  it('matches flirtify hosts', () => {
+    const a = new FlirtifyAdapter();
+    expect(a.matches(new URL('https://flirtify.com/chat'))).toBe(true);
+    expect(a.matches(new URL('https://www.flirtify.com/'))).toBe(true);
+    expect(a.matches(new URL('https://coomeet.com/'))).toBe(false);
+  });
+
+  it('derives identity from the profile slug in the URL', () => {
+    setUrl('https://flirtify.com/profile/julia-99');
+    document.body.innerHTML = `
+      <div class="profile-name">Julia</div>
+      <div class="chat__messages"><div class="message incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+    const conv = new FlirtifyAdapter().getConversation(document);
+    expect(conv!.clientId).toBe('julia-99');
+    expect(conv!.conversationId).toBe('flirtify-julia-99');
+  });
+
+  it('filters gift and media cards out of the message list', () => {
+    setUrl('https://flirtify.com/profile/julia-99');
+    document.body.innerHTML = `
+      <div class="chat__messages">
+        <div class="message incoming">Hello there</div>
+        <div class="message incoming">[gift]</div>
+        <div class="message incoming">sent a gift</div>
+        <div class="message incoming">is typing</div>
+      </div>
+      <textarea placeholder="message"></textarea>`;
+    const messages = new FlirtifyAdapter().getMessages(document);
+    expect(messages.map((m) => m.text)).toEqual(['Hello there']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Detector
+// ---------------------------------------------------------------------------
+
+describe('PlatformDetector', () => {
+  it('selects the demo adapter on localhost', () => {
+    setUrl('http://localhost:5173/demo/demo.html');
+    document.body.innerHTML = `
+      <div id="demo-messages"><div data-dir="in">hi</div></div>
+      <textarea id="demo-input"></textarea>`;
+    const report = new PlatformDetector().detect(document);
+    expect(report.platform).toBe('demo');
+    expect(report.confidence).toBeGreaterThan(0.9);
+  });
+
+  it('selects CooMeet on coomeet.com', () => {
+    setUrl('https://coomeet.com/chat');
+    document.body.innerHTML = `
+      <div class="video-chat" data-partner-id="p1"><div class="partner-name">Anna</div></div>
+      <div class="chat-messages"><div class="message incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+    expect(new PlatformDetector().detect(document).platform).toBe('coomeet');
+  });
+
+  it('selects Flirtify on flirtify.com', () => {
+    setUrl('https://flirtify.com/profile/x1');
+    document.body.innerHTML = `
+      <div class="profile-name">X</div>
+      <div class="chat__messages"><div class="message incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+    expect(new PlatformDetector().detect(document).platform).toBe('flirtify');
+  });
+
+  it('falls back to generic on an unknown chat site', () => {
+    setUrl('https://some-unknown-chat.example/room');
+    document.body.innerHTML = `
+      <div class="messages" role="log"><div>a</div><div>b</div><div>c</div></div>
+      <textarea placeholder="Type a message"></textarea>`;
+    const report = new PlatformDetector().detect(document);
+    expect(report.platform).toBe('generic');
+    expect(report.confidence).toBeGreaterThan(0);
+  });
+
+  it('reports low confidence on a page with no chat', () => {
+    setUrl('https://some-unknown-chat.example/');
+    document.body.innerHTML = `<article><p>Just an article</p></article>`;
+    expect(new PlatformDetector().detect(document).confidence).toBeLessThan(0.5);
+  });
+
+  it('lets a user config override the built-ins', () => {
+    setUrl('https://my-custom-site.test/chat');
+    document.body.innerHTML = `
+      <div id="custom-messages"><div class="in">hello</div></div>
+      <textarea id="custom-input"></textarea>`;
+    setRect(document.querySelector('#custom-input')!, { top: 600, left: 300, width: 400, height: 40 });
+
+    const detector = new PlatformDetector();
+    detector.setUserConfigs([
+      {
+        hosts: ['my-custom-site.test'],
+        messageContainer: ['#custom-messages'],
+        incomingMessage: ['.in'],
+        input: ['#custom-input'],
+      },
+    ]);
+
+    const report = detector.detect(document);
+    expect(report.confidence).toBeGreaterThanOrEqual(0.95);
+    expect(report.notes.join(' ')).toContain('user config');
+  });
+
+  it('never throws when an adapter fails to score', () => {
+    setUrl('https://broken.test/');
+    document.body.innerHTML = '<div>x</div>';
+    const detector = new PlatformDetector();
+    detector.register({
+      id: 'generic',
+      label: 'Broken',
+      matches: () => true,
+      score: () => {
+        throw new Error('adapter exploded');
+      },
+      getConversation: () => null,
+      getMessages: () => [],
+      getMessageContainer: () => null,
+      getInput: () => null,
+      getSendButton: () => null,
+      insertText: () => false,
+      send: async () => false,
+    });
+    expect(() => detector.detect(document)).not.toThrow();
+  });
+
+  it('populates the resolved capabilities in the report', () => {
+    setUrl('http://localhost:5173/demo/demo.html');
+    document.body.innerHTML = `
+      <div id="demo-messages"><div data-dir="in">hi</div></div>
+      <textarea id="demo-input"></textarea>
+      <button id="demo-send">Send</button>`;
+    const report = new PlatformDetector().detect(document);
+    expect(report.resolved.input).toContain('textarea');
+    expect(report.resolved.sendButton).toContain('button');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Built-in configs
+// ---------------------------------------------------------------------------
+
+describe('built-in site configs', () => {
+  it('every config declares at least one host', () => {
+    for (const cfg of [COOMEET_CONFIG, FLIRTIFY_CONFIG, DEMO_CONFIG]) {
+      expect(cfg.hosts.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('every declared selector is valid CSS', () => {
+    for (const cfg of [COOMEET_CONFIG, FLIRTIFY_CONFIG, DEMO_CONFIG]) {
+      const sels = [
+        ...(cfg.messageContainer ?? []),
+        ...(cfg.incomingMessage ?? []),
+        ...(cfg.outgoingMessage ?? []),
+        ...(cfg.input ?? []),
+        ...(cfg.sendButton ?? []),
+        ...(cfg.author ?? []),
+      ];
+      for (const sel of sels) {
+        expect(() => document.querySelector(sel), `invalid selector: ${sel}`).not.toThrow();
+      }
+    }
+  });
+
+  it('a stale selector does not break detection (heuristics still run)', () => {
+    setUrl('https://coomeet.com/chat');
+    // No element matches any of the CooMeet selectors; only generic heuristics
+    // can find the field.
+    document.body.innerHTML = `
+      <div class="genericList" role="log"><div>a</div><div>b</div><div>c</div></div>
+      <textarea aria-label="Your message"></textarea>`;
+    const adapter = new CooMeetAdapter();
+    expect(adapter.getInput(document)).not.toBeNull();
+  });
+});

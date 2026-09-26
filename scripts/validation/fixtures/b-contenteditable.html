@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture B — contenteditable</title>
+<link rel="stylesheet" href="/common.css" />
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="who" id="partner-name">Mila</span>
+    <span class="tag">fixture B · contenteditable</span>
+    <span class="spacer"></span>
+    <span class="note">no textarea anywhere</span>
+  </header>
+
+  <!-- Modern editors (Slack/Discord-like) use a rich-text div. There is no
+       <textarea> on this page at all, so a selector-only approach would fail. -->
+  <div class="log" id="log" role="log" aria-live="polite" data-partner-id="mila-b2">
+    <div class="msg in" data-message-id="b-1">Hi! Nice to meet you.<span class="meta">10:04</span></div>
+  </div>
+
+  <div class="composer">
+    <div class="editable" id="editor" contenteditable="true" role="textbox"
+         aria-label="Write a message" data-placeholder="Write a message…"></div>
+    <button class="send" id="send-btn" aria-label="Send">Send</button>
+  </div>
+</div>
+
+<script>
+  const log = document.getElementById('log');
+  const editor = document.getElementById('editor');
+  let n = 1;
+
+  function append(dir, text) {
+    const el = document.createElement('div');
+    el.className = `msg ${dir}`;
+    el.dataset.messageId = `b-${++n}`;
+    el.textContent = text;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return el;
+  }
+
+  function sendNow() {
+    const text = (editor.innerText || editor.textContent || '').trim();
+    if (!text) return;
+    append('out', text);
+    editor.innerHTML = '';
+  }
+
+  document.getElementById('send-btn').addEventListener('click', sendNow);
+  // Rich editors often submit on Enter rather than only via the button.
+  editor.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendNow(); }
+  });
+
+  window.__fixture = {
+    receive: (text) => append('in', text),
+    sent: () => Array.from(log.querySelectorAll('.msg.out')).map((e) => e.textContent),
+    incoming: () => Array.from(log.querySelectorAll('.msg.in')).map((e) => e.textContent),
+    composerValue: () => editor.innerText || editor.textContent || '',
+  };
+</script>
+</body>
+</html>

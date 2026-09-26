@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ROSE IA — Settings</title>
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar" aria-label="Settings sections">
+      <div class="brand">
+        <span class="mark">R</span>
+        <span>
+          <span class="name">ROSE IA</span><br />
+          <span class="ver" id="version">v0.1.0</span>
+        </span>
+      </div>
+      <button class="nav-item" data-section="ai" aria-current="true"><span class="ico">✨</span><span>AI provider</span></button>
+      <button class="nav-item" data-section="conversation"><span class="ico">💬</span><span>Conversation</span></button>
+      <button class="nav-item" data-section="automation"><span class="ico">⚡</span><span>Automation</span></button>
+      <button class="nav-item" data-section="memory"><span class="ico">🧠</span><span>Memory</span></button>
+      <button class="nav-item" data-section="translation"><span class="ico">🌍</span><span>Translation</span></button>
+      <button class="nav-item" data-section="live"><span class="ico">🎧</span><span>Live calls</span></button>
+      <button class="nav-item" data-section="appearance"><span class="ico">🎨</span><span>Appearance</span></button>
+      <button class="nav-item" data-section="notifications"><span class="ico">🔔</span><span>Notifications</span></button>
+      <button class="nav-item" data-section="platforms"><span class="ico">🔌</span><span>Platforms</span></button>
+      <button class="nav-item" data-section="data"><span class="ico">🗄️</span><span>Data &amp; privacy</span></button>
+      <button class="nav-item" data-section="debug"><span class="ico">🐞</span><span>Diagnostics</span></button>
+    </nav>
+    <main class="main" id="main"></main>
+  </div>
+  <script type="module" src="./options.ts"></script>
+</body>
+</html>

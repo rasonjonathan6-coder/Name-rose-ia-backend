@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture A — classic textarea</title>
+<link rel="stylesheet" href="/common.css" />
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="who" id="partner-name">Anna</span>
+    <span class="tag">fixture A · textarea</span>
+    <span class="spacer"></span>
+    <span class="note">data-partner-id="anna-a1"</span>
+  </header>
+
+  <!-- Conventional shape: a scrolling log of divs, then a textarea + button. -->
+  <div class="log" id="log" role="log" aria-live="polite" data-partner-id="anna-a1">
+    <div class="msg in" data-message-id="a-1">Hey there! How is your day going?<span class="meta">10:02</span></div>
+  </div>
+
+  <div class="composer">
+    <textarea id="composer" placeholder="Type a message…" aria-label="Message"></textarea>
+    <button class="send" id="send-btn" aria-label="Send message">Send</button>
+  </div>
+</div>
+
+<script>
+  const log = document.getElementById('log');
+  const composer = document.getElementById('composer');
+  const send = document.getElementById('send-btn');
+  let n = 1;
+
+  function append(dir, text) {
+    const el = document.createElement('div');
+    el.className = `msg ${dir}`;
+    el.dataset.messageId = `a-${++n}`;
+    el.textContent = text;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    el.appendChild(meta);
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return el;
+  }
+
+  send.addEventListener('click', () => {
+    const text = composer.value.trim();
+    if (!text) return;
+    append('out', text);
+    composer.value = '';
+  });
+
+  window.__fixture = {
+    receive: (text) => append('in', text),
+    sent: () => Array.from(log.querySelectorAll('.msg.out')).map((e) => e.childNodes[0].textContent),
+    incoming: () => Array.from(log.querySelectorAll('.msg.in')).map((e) => e.childNodes[0].textContent),
+    composerValue: () => composer.value,
+  };
+</script>
+</body>
+</html>

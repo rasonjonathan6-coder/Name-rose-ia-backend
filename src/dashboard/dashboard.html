@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ROSE IA — Dashboard</title>
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar" aria-label="Dashboard sections">
+      <div class="brand">
+        <span class="mark">R</span>
+        <span><span class="name">ROSE IA</span><br /><span class="ver">Dashboard</span></span>
+      </div>
+      <button class="nav-item" data-section="overview" aria-current="true"><span class="ico">📊</span><span>Overview</span></button>
+      <button class="nav-item" data-section="conversations"><span class="ico">💬</span><span>Conversations</span></button>
+      <button class="nav-item" data-section="costs"><span class="ico">💳</span><span>AI costs</span></button>
+      <button class="nav-item" data-section="activity"><span class="ico">📈</span><span>Activity</span></button>
+      <button class="nav-item" data-section="system"><span class="ico">🩺</span><span>System</span></button>
+    </nav>
+    <main class="main" id="main"></main>
+  </div>
+  <script type="module" src="./dashboard.ts"></script>
+</body>
+</html>

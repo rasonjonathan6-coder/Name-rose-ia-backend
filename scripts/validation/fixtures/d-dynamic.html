@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture D — dynamic MutationObserver chat</title>
+<link rel="stylesheet" href="/common.css" />
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="who" id="partner-name">Yuki</span>
+    <span class="tag">fixture D · dynamic, virtualised</span>
+    <span class="spacer"></span>
+    <span class="note">messages appear on a timer</span>
+  </header>
+
+  <!-- Nothing but the composer exists at load. Messages are injected later, and
+       old ones are periodically pruned (virtualisation), which is the case that
+       breaks naive "read the list once" implementations. -->
+  <div class="log" id="log" role="log" aria-live="polite" data-partner-id="yuki-d4"></div>
+
+  <div class="composer">
+    <textarea id="composer" placeholder="Message…" aria-label="Message"></textarea>
+    <button class="send" id="send-btn" aria-label="Send">Send</button>
+  </div>
+</div>
+
+<script>
+  const log = document.getElementById('log');
+  const composer = document.getElementById('composer');
+  let n = 0;
+
+  function append(dir, text) {
+    const el = document.createElement('div');
+    el.className = `msg ${dir}`;
+    el.dataset.messageId = `d-${++n}`;
+    el.textContent = text;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    // Virtualisation: keep at most 6 nodes, dropping the oldest.
+    while (log.children.length > 6) log.removeChild(log.firstElementChild);
+    return el;
+  }
+
+  document.getElementById('send-btn').addEventListener('click', () => {
+    const text = composer.value.trim();
+    if (!text) return;
+    append('out', text);
+    composer.value = '';
+  });
+
+  let timer = null;
+  window.__fixture = {
+    receive: (text) => append('in', text),
+    startStream(intervalMs = 700, texts = ['Are you there?', 'I like your photo', 'What do you do for a living?']) {
+      let i = 0;
+      timer = setInterval(() => append('in', texts[i++ % texts.length]), intervalMs);
+    },
+    stopStream() { clearInterval(timer); timer = null; },
+    sent: () => Array.from(log.querySelectorAll('.msg.out')).map((e) => e.textContent),
+    incoming: () => Array.from(log.querySelectorAll('.msg.in')).map((e) => e.textContent),
+    composerValue: () => composer.value,
+    nodeCount: () => log.children.length,
+  };
+</script>
+</body>
+</html>

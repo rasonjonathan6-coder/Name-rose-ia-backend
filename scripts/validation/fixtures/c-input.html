@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture C — single-line input</title>
+<link rel="stylesheet" href="/common.css" />
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="who" id="partner-name">Lena</span>
+    <span class="tag">fixture C · input[type=text]</span>
+    <span class="spacer"></span>
+    <span class="note">old-school markup</span>
+  </header>
+
+  <!-- Legacy chat widgets: a bare <input>, a table of messages, and a send
+       button whose only signal is an <svg> with a class. -->
+  <table class="log" id="log" data-partner-id="lena-c3" role="log" aria-live="polite">
+    <tbody id="log-body">
+      <tr class="msg in" data-message-id="c-1"><td>Hello! Where are you from?</td></tr>
+    </tbody>
+  </table>
+
+  <div class="composer">
+    <input type="text" id="composer" placeholder="Say something" aria-label="Message" />
+    <button class="send" id="send-btn" aria-label="Send"><svg class="send-icon"></svg></button>
+  </div>
+</div>
+
+<script>
+  const body = document.getElementById('log-body');
+  const composer = document.getElementById('composer');
+  let n = 1;
+
+  function append(dir, text) {
+    const tr = document.createElement('tr');
+    tr.className = `msg ${dir}`;
+    tr.dataset.messageId = `c-${++n}`;
+    const td = document.createElement('td');
+    td.textContent = text;
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return tr;
+  }
+
+  document.getElementById('send-btn').addEventListener('click', () => {
+    const text = composer.value.trim();
+    if (!text) return;
+    append('out', text);
+    composer.value = '';
+  });
+  composer.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('send-btn').click();
+  });
+
+  window.__fixture = {
+    receive: (text) => append('in', text),
+    sent: () => Array.from(body.querySelectorAll('.msg.out td')).map((e) => e.textContent),
+    incoming: () => Array.from(body.querySelectorAll('.msg.in td')).map((e) => e.textContent),
+    composerValue: () => composer.value,
+  };
+</script>
+</body>
+</html>

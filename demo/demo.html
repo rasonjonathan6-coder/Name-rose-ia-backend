@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ROSE IA — Local demo chat</title>
+  <link rel="stylesheet" href="./demo.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="mark">R</span> ROSE IA <span class="tag">demo</span></div>
+      <p class="lede">
+        A local chat harness for testing ROSE without touching a real platform.
+        It exposes the same DOM shape ROSE looks for on CooMeet and Flirtify.
+      </p>
+
+      <div class="control-group">
+        <h3>Simulate</h3>
+        <button id="sim-incoming" class="btn">📨 Client sends a message</button>
+        <button id="sim-greeting" class="btn">👋 Client says hello</button>
+        <button id="sim-question" class="btn">❓ Client asks a question</button>
+        <button id="sim-personal" class="btn">🧍 Client shares something personal</button>
+        <button id="sim-french" class="btn">🇫🇷 Client writes in French</button>
+        <button id="sim-repeat" class="btn">🔁 Client repeats the last message</button>
+        <button id="sim-inactive" class="btn">⏰ Make the chat go quiet</button>
+      </div>
+
+      <div class="control-group">
+        <h3>Conversation</h3>
+        <button id="switch-client" class="btn">🔄 Switch to a different client</button>
+        <button id="clear-chat" class="btn">🗑 Clear the chat</button>
+      </div>
+
+      <div class="control-group">
+        <h3>State</h3>
+        <div class="readout" id="readout">—</div>
+      </div>
+
+      <div class="control-group">
+        <h3>Tests</h3>
+        <button id="run-tests" class="btn primary">▶ Run self-checks</button>
+        <div class="readout" id="test-out">Not run yet.</div>
+      </div>
+
+      <p class="foot">
+        ROSE runs as an extension. If the overlay is missing, load the unpacked build
+        from <code>dist/</code> at <code>chrome://extensions</code> and reload this page.
+      </p>
+    </aside>
+
+    <main class="chat">
+      <header class="chat-header" data-testid="partner-name">
+        <div class="avatar" id="partner-avatar">S</div>
+        <div>
+          <div class="partner-name" id="partner-name">Sophie</div>
+          <div class="status" id="partner-status">online</div>
+        </div>
+        <div class="spacer"></div>
+        <div class="lang-pill" id="lang-pill">—</div>
+      </header>
+
+      <!-- ROSE's GenericChatAdapter detects this via DEMO_CONFIG -->
+      <div id="demo-messages" class="messages" role="log" aria-live="polite"></div>
+
+      <footer class="composer">
+        <textarea id="demo-input" placeholder="Type a message…" rows="1" aria-label="Message"></textarea>
+        <button id="demo-send" aria-label="Send">Send</button>
+      </footer>
+    </main>
+  </div>
+
+  <script type="module" src="./demo.ts"></script>
+</body>
+</html>

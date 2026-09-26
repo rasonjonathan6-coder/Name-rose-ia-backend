@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture E — SPA conversation switching</title>
+<link rel="stylesheet" href="/common.css" />
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="who" id="partner-name">—</span>
+    <span class="tag">fixture E · SPA</span>
+    <span class="spacer"></span>
+    <span class="note">conversation swaps without reload</span>
+  </header>
+
+  <div class="row">
+    <div class="side">
+      <h2>Conversations</h2>
+      <div id="list"></div>
+    </div>
+    <div class="col">
+      <div class="log" id="log" role="log" aria-live="polite"></div>
+      <div class="composer">
+        <textarea id="composer" placeholder="Message…" aria-label="Message"></textarea>
+        <button class="send" id="send-btn" aria-label="Send">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Three distinct clients. Switching rewrites the log in place and pushes a new
+  // URL, exactly like a router-driven app — no page reload, no navigation event
+  // for a naive listener to catch.
+  const CLIENTS = {
+    'sofia-e5': { name: 'Sofia', seed: [{ dir: 'in', text: 'Hi, I am Sofia. Where are you from?' }] },
+    'nadia-e6': { name: 'Nadia', seed: [{ dir: 'in', text: 'Hello! I am Nadia. What do you do?' }] },
+    'irina-e7': { name: 'Irina', seed: [{ dir: 'in', text: 'Hey! I am Irina. Do you like music?' }] },
+  };
+
+  const log = document.getElementById('log');
+  const composer = document.getElementById('composer');
+  const nameEl = document.getElementById('partner-name');
+  const list = document.getElementById('list');
+  let current = null;
+  let n = 0;
+
+  function append(dir, text) {
+    const el = document.createElement('div');
+    el.className = `msg ${dir}`;
+    el.dataset.messageId = `e-${++n}`;
+    el.textContent = text;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return el;
+  }
+
+  function open(id, push = true) {
+    current = id;
+    const c = CLIENTS[id];
+    log.innerHTML = '';
+    log.dataset.partnerId = id;
+    nameEl.textContent = c.name;
+    document.title = `${c.name} — fixture E`;
+    c.seed.forEach((m) => append(m.dir, m.text));
+    if (push) history.pushState({ id }, '', `/e-spa.html?c=${id}`);
+    renderList();
+  }
+
+  function renderList() {
+    list.innerHTML = '';
+    for (const [id, c] of Object.entries(CLIENTS)) {
+      const el = document.createElement('div');
+      el.className = `item${id === current ? ' active' : ''}`;
+      el.textContent = c.name;
+      el.dataset.clientId = id;
+      el.addEventListener('click', () => open(id));
+      list.appendChild(el);
+    }
+  }
+
+  document.getElementById('send-btn').addEventListener('click', () => {
+    const text = composer.value.trim();
+    if (!text) return;
+    append('out', text);
+    composer.value = '';
+  });
+
+  window.__fixture = {
+    open: (id) => open(id),
+    receive: (text) => append('in', text),
+    current: () => current,
+    sent: () => Array.from(log.querySelectorAll('.msg.out')).map((e) => e.textContent),
+    incoming: () => Array.from(log.querySelectorAll('.msg.in')).map((e) => e.textContent),
+    composerValue: () => composer.value,
+    clearComposer: () => { composer.value = ''; },
+  };
+
+  open('sofia-e5', false);
+</script>
+</body>
+</html>

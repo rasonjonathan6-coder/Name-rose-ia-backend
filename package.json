@@ -1,0 +1,31 @@
+{
+  "name": "rose-ia",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ROSE IA — real-time conversational AI assistant for online chat/webcam platforms (Chrome/Edge MV3 extension).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "node scripts/build.mjs",
+    "build:prod": "node scripts/build.mjs --prod",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "demo": "npm run build && node scripts/serve-demo.mjs",
+    "verify": "npm run typecheck && npm run test && npm run build",
+    "verify:browser": "node scripts/validation/phase1-install.mjs && node scripts/validation/phase2-generic.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.10.2",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

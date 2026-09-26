@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture F — multiple text zones</title>
+<link rel="stylesheet" href="/common.css" />
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="who" id="partner-name">Vera</span>
+    <span class="tag">fixture F · several text zones</span>
+    <span class="spacer"></span>
+    <span class="note">decoy fields everywhere</span>
+  </header>
+
+  <!-- A decoy search box at the top, a notes field in a side panel, and the real
+       composer at the bottom. Choosing the wrong field is the classic failure
+       mode for generic detection, so this fixture exists to catch it. -->
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="Search conversations" aria-label="Search" />
+    <input type="text" id="nickname" placeholder="Your nickname" aria-label="Nickname" />
+  </div>
+
+  <div class="row">
+    <div class="side">
+      <h2>Notes</h2>
+      <textarea id="notes" placeholder="Private notes about this client"></textarea>
+    </div>
+    <div class="col">
+      <div class="log" id="log" role="log" aria-live="polite" data-partner-id="vera-f8">
+        <div class="msg in" data-message-id="f-1">Hi! Do you remember me?<span class="meta">09:41</span></div>
+      </div>
+      <div class="composer">
+        <textarea id="composer" placeholder="Type a message…" aria-label="Message"></textarea>
+        <button class="send" id="send-btn" aria-label="Send message">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const log = document.getElementById('log');
+  const composer = document.getElementById('composer');
+  let n = 1;
+
+  function append(dir, text) {
+    const el = document.createElement('div');
+    el.className = `msg ${dir}`;
+    el.dataset.messageId = `f-${++n}`;
+    el.textContent = text;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return el;
+  }
+
+  document.getElementById('send-btn').addEventListener('click', () => {
+    const text = composer.value.trim();
+    if (!text) return;
+    append('out', text);
+    composer.value = '';
+  });
+
+  window.__fixture = {
+    receive: (text) => append('in', text),
+    sent: () => Array.from(log.querySelectorAll('.msg.out')).map((e) => e.textContent),
+    incoming: () => Array.from(log.querySelectorAll('.msg.in')).map((e) => e.textContent),
+    composerValue: () => composer.value,
+    otherFields: () => ({
+      search: document.getElementById('search').value,
+      nickname: document.getElementById('nickname').value,
+      notes: document.getElementById('notes').value,
+    }),
+  };
+</script>
+</body>
+</html>
