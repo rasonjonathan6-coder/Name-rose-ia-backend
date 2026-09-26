@@ -151,6 +151,28 @@ Real Chromium, real sites, extension loaded. Two things to know before editing i
   `DevToolsActivePort`, otherwise relaunching on the same profile reads the
   previous run's dead port.
 
+## Real-provider validation (`scripts/validation/phase5-real-ai.mjs`)
+
+Runs the full pipeline against a real keyless provider (Pollinations,
+`https://text.pollinations.ai/openai`). Needs the validation server on
+`127.0.0.1:8788` (`node scripts/validation/server.mjs`) — it does not start one
+itself, so a bare run fails at "demo page loads".
+
+- **Native `confirm()` freezes the renderer.** Enabling AUTO mode asks for
+  confirmation. A modal dialog blocks the page, and the next CDP
+  `Runtime.evaluate` times out with no useful error. `scripts/cdp.mjs` therefore
+  auto-accepts dialogs (`Page.javascriptDialogOpening` →
+  `Page.handleJavaScriptDialog`) and exposes `session.setDialogPolicy('dismiss')`
+  for tests that need the refusal path.
+- **Wait for a *change*, not for a value.** The overlay keeps the previous
+  message's suggestions on screen, so "wait until a suggestion exists" returns
+  instantly and every later assertion reads stale state. `ask()` fingerprints the
+  suggestion list before adding a message and waits for it to differ.
+- Restore the real provider before the latency section; the unreachable-provider
+  case deliberately leaves a broken config active.
+- Raise the CDP timeout for these runs — a real model can take tens of seconds
+  (`scripts/cdp.mjs` uses 180s).
+
 ## Honesty requirement
 
 The user explicitly requires that features not be claimed as working unless

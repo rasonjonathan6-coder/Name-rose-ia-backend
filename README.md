@@ -22,9 +22,9 @@ platform in a browser.
 | Chat / message detection | yes | yes (E2E + adapter tests + 6-shape browser harness) | yes on the local demo harness; live pages tested had no chat DOM (see below) |
 | Reply-field detection + text insertion | yes | yes (E2E insertion tests) | yes — text written into web.libera.chat's real composer and read back |
 | Runtime site activation (host grant + dynamic script) | yes | yes (popup-flow check) | yes — registers and injects on an arbitrary live origin |
-| AI generation (OpenAI-compatible / OpenRouter) | yes | yes (37 generation + 18 client tests) | against a real HTTP server in tests; not billed against a live provider in CI |
-| Client memory + isolation | yes | yes (22 memory + 27 E2E tests) | yes |
-| Translation / language detection | yes | yes (17 language tests) | yes |
+| AI generation (OpenAI-compatible / OpenRouter) | yes | yes (43 generation + 21 client tests) | yes — validated against a real keyless provider (Pollinations `gpt-oss-20b`), see Phase 5 |
+| Client memory + isolation | yes | yes (22 memory + 27 E2E tests) | yes — facts and summaries persisted and read back against a real model |
+| Translation / language detection | yes | yes (17 language tests + real-model fr→en / en→fr) | yes |
 | Anti-repetition quality guard | yes | yes (27 tests) | yes |
 | Manual mode | yes | yes | yes |
 | Assisted mode | yes | yes | yes |
@@ -37,6 +37,28 @@ The CooMeet, Flirtify and live-assistant rows are deliberately not claimed as
 working in production. Their adapters are unit-tested against representative DOM
 fixtures, but no live platform session was used to confirm them. Revenue
 figures are **not** displayed anywhere, because ROSE does not invent data.
+
+### Real-provider validation (Phase 5)
+
+`node scripts/validation/phase5-real-ai.mjs` (needs the validation server on
+`127.0.0.1:8788`) drives the whole pipeline against a **real** AI provider over
+real HTTP — a keyless Pollinations endpoint (`https://text.pollinations.ai/openai`,
+model `gpt-oss-20b`). Nothing is mocked: the extension makes the network calls
+and the harness reads back what the model produced.
+
+31/31 checks pass, covering: three parsed suggestions for a fresh message; a
+French message producing a non-echo reply; follow-up context; a stated fact
+extracted and persisted (`name=Sofia`); a conversation summary rolled forward by
+the model; per-client memory isolation; fr→en and en→fr translation; assisted
+mode filling the composer without sending; auto mode sending exactly one reply
+and STOP halting further sends immediately; a bad model and an unreachable
+provider both surfacing a clear error and injecting nothing; real token
+accounting; and measured latency.
+
+Phase 5 also covers the failure paths that used to hide bugs: an empty
+translation request is now rejected before any call is made, and enabling AUTO
+answers the native confirmation dialog (the harness auto-accepts dialogs, since
+a blocking `confirm()` otherwise freezes the renderer and times out CDP).
 
 ### Live-site validation (Phase 4)
 

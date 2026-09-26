@@ -73,8 +73,11 @@ export class AIClient {
     const config = await this.getConfig();
     const apiKey = await this.getApiKey(config.id);
 
-    // A proxy backend holds the key server-side, so a missing local key is fine.
-    if (!apiKey && !config.viaProxy) {
+    // A proxy backend holds the key server-side, so a missing local key is
+    // fine. Neither is a key required for an endpoint that has none (a local
+    // model, or a keyless test endpoint) — asking for a credential there would
+    // block a provider that works perfectly well without one.
+    if (!apiKey && !config.viaProxy && config.requiresKey !== false) {
       throw new AIError(
         `No API key configured for provider "${config.label}". Open ROSE settings → AI to add one.`,
         'no-key',

@@ -185,6 +185,12 @@ export interface AIProviderConfig {
   enabled: boolean;
   /** true when baseUrl points at a ROSE backend acting as a secure proxy. */
   viaProxy: boolean;
+  /**
+   * false for endpoints that genuinely need no credential (a local model, or a
+   * keyless test endpoint). Absent means true: every preset shipped before this
+   * flag existed did require a key, so the default must stay strict.
+   */
+  requiresKey?: boolean;
 }
 
 /** AI configuration block: which provider is active and the guard rails. */

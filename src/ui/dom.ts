@@ -131,6 +131,7 @@ export const PROVIDER_PRESETS = [
   { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', models: ['openai/gpt-4o-mini', 'meta-llama/llama-3.1-8b-instruct', 'anthropic/claude-3.5-haiku', 'google/gemini-flash-1.5'], keyHint: 'sk-or-…' },
   { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'], keyHint: 'sk-…' },
   { id: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'], keyHint: 'gsk_…' },
+  { id: 'pollinations', label: 'Pollinations (keyless)', baseUrl: 'https://text.pollinations.ai/openai', models: ['openai', 'mistral'], keyHint: 'not required' },
 ] as const;
 
 export const STYLE_OPTIONS = [

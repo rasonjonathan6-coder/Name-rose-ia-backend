@@ -128,20 +128,23 @@ function renderAI(): HTMLElement {
     )),
   );
 
+  const keyNotRequired = provider.viaProxy || provider.requiresKey === false;
   providerCard.appendChild(
     field(
       'API key',
       h('input', {
         type: 'password',
         value: secrets[provider.id] ?? '',
-        placeholder: provider.viaProxy ? 'Not required — the backend holds the key' : 'Paste your key (stored locally)',
+        placeholder: keyNotRequired ? 'Not required for this provider' : 'Paste your key (stored locally)',
         oninput: debounceInput(async (v: string) => {
           await storage.saveSecret(provider.id, v.trim());
           secrets = await storage.loadSecrets();
         }),
       }),
-      provider.viaProxy
-        ? 'The proxy backend keeps the key server-side; leave this empty.'
+      keyNotRequired
+        ? provider.viaProxy
+          ? 'The proxy backend keeps the key server-side; leave this empty.'
+          : 'This provider needs no key. Leave this empty.'
         : 'Stored in chrome.storage.local under a separate namespace from your settings. Never sent anywhere except the provider you choose.',
     ),
   );

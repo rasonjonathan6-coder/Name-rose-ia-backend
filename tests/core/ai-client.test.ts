@@ -275,6 +275,36 @@ describe('AIClient — error handling', () => {
       client.complete({ messages: [{ role: 'user', content: 'hi' }], model: 'm' }),
     ).rejects.toThrow();
   });
+
+  it('still demands a key for a normal provider when none is stored', async () => {
+    const base = await startServer((_req, res) => res.json(200, completion('unused')));
+    const client = new AIClient(async () => provider(base), async () => '');
+    const err = (await client
+      .complete({ messages: [{ role: 'user', content: 'hi' }], model: 'm' })
+      .catch((e: unknown) => e)) as AIError;
+    expect(err).toBeInstanceOf(AIError);
+    expect(err.code).toBe('no-key');
+  });
+
+  it('does not demand a key when the provider declares it needs none', async () => {
+    const base = await startServer((_req, res) => res.json(200, completion('keyless works')));
+    const client = new AIClient(
+      async () => provider(base, { requiresKey: false }),
+      async () => '',
+    );
+    const res = await client.complete({ messages: [{ role: 'user', content: 'hi' }], model: 'm' });
+    expect(res.text).toBe('keyless works');
+  });
+
+  it('sends no Authorization header for a keyless provider', async () => {
+    const base = await startServer((_req, res) => res.json(200, completion('ok')));
+    const client = new AIClient(
+      async () => provider(base, { requiresKey: false }),
+      async () => '',
+    );
+    await client.complete({ messages: [{ role: 'user', content: 'hi' }], model: 'm' });
+    expect(captured.at(-1)?.headers.authorization).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

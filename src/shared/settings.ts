@@ -59,6 +59,22 @@ export const DEFAULT_SETTINGS: RoseSettings = {
         enabled: false,
         viaProxy: true,
       },
+      {
+        // A real, keyless OpenAI-compatible endpoint. It exists so the full
+        // pipeline can be exercised against a genuine model without shipping or
+        // handling anyone's credential; keep it disabled by default.
+        id: 'pollinations',
+        label: 'Pollinations (keyless, for testing)',
+        baseUrl: 'https://text.pollinations.ai/openai',
+        apiKey: '',
+        model: 'openai',
+        fastModel: 'openai',
+        temperature: 0.85,
+        maxTokens: 320,
+        enabled: false,
+        viaProxy: false,
+        requiresKey: false,
+      },
     ],
     maxResponseChars: 600,
     allowNSFW: false,

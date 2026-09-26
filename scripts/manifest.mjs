@@ -54,12 +54,14 @@ export function buildManifest({ prod = false } = {}) {
           'https://openrouter.ai/*',
           'https://api.groq.com/*',
           'https://generativelanguage.googleapis.com/*',
+          'https://text.pollinations.ai/*',
         ]
       : [
           'https://api.openai.com/*',
           'https://openrouter.ai/*',
           'https://api.groq.com/*',
           'https://generativelanguage.googleapis.com/*',
+          'https://text.pollinations.ai/*',
           'http://localhost/*',
           'http://127.0.0.1/*',
         ],

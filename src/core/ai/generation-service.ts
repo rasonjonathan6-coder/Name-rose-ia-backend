@@ -305,7 +305,17 @@ export class GenerationService {
         kind: 'facts',
       });
       const parsed = extractJson<any>(res.text);
-      const list = Array.isArray(parsed) ? parsed : (parsed?.facts ?? []);
+      // Models return a bare object when the message yields exactly one fact,
+      // even though the prompt asks for an array. Reading only `parsed.facts`
+      // and arrays silently discarded those facts, so a single-object reply is
+      // treated as a one-item list.
+      const list = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.facts)
+          ? parsed.facts
+          : parsed && typeof parsed.key === 'string' && typeof parsed.value === 'string'
+            ? [parsed]
+            : [];
       return (list as any[])
         .filter((f) => f && typeof f.key === 'string' && typeof f.value === 'string')
         .map((f) => ({
@@ -321,6 +331,10 @@ export class GenerationService {
   }
 
   async translate(text: string, targetLang: string, tone: string): Promise<string | null> {
+    // An empty request would be sent to the provider verbatim, and a model
+    // asked to translate nothing echoes back quoting artefacts like `""""""`
+    // as if it were a real translation. Reject it before spending a call.
+    if (!text.trim()) return null;
     const provider = await this.deps.getActiveProvider();
     const model = pickModel(provider, 'translation', 'simple');
     const prompt = buildTranslationPrompt(text, targetLang, tone);

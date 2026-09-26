@@ -103,7 +103,9 @@ export class Cdp {
           this.pending.delete(id);
           reject(new Error(`CDP timeout: ${method}`));
         }
-      }, 60_000);
+      // A CDP call that carries a network round-trip to a real model can take
+      // far longer than a DOM read, so the budget is generous.
+      }, 180_000);
     });
   }
 
@@ -297,6 +299,17 @@ export class Browser {
     await send('Page.enable').catch(() => {});
     for (let i = 0; i < 40 && contexts.length === 0; i++) await sleep(50);
 
+    // A native confirm() (ROSE asks before switching to AUTO) blocks the
+    // renderer: the page stops responding and the next CDP evaluate times out
+    // with no clue why. Accepting dialogs keeps the harness moving; a test that
+    // wants to exercise the *refusal* path can override this per session.
+    let dialogPolicy = 'accept';
+    this.cdp.on('Page.javascriptDialogOpening', (params, sid) => {
+      if (sid !== sessionId) return;
+      const accept = typeof dialogPolicy === 'function' ? dialogPolicy(params) : dialogPolicy === 'accept';
+      send('Page.handleJavaScriptDialog', { accept }).catch(() => {});
+    });
+
     const session = {
       sessionId,
       targetInfo,
@@ -318,6 +331,10 @@ export class Browser {
       /** The content script's isolated world, where `window.ROSE_IA` lives. */
       get isolatedContextId() {
         return pickContext(contexts, 'isolated');
+      },
+      /** 'accept' (default) or 'dismiss' — how native dialogs are answered. */
+      setDialogPolicy: (p) => {
+        dialogPolicy = p;
       },
       detach: () => {
         offCreated();

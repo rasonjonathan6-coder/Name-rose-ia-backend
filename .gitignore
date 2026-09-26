@@ -4,3 +4,9 @@ dist/
 .DS_Store
 .vite/
 coverage/
+
+# Local secrets. The validation harness reads provider credentials from the
+# environment (ROSE_PHASE5_API_KEY), so a .env file is easy to create here and
+# must never be committed.
+.env
+.env.*

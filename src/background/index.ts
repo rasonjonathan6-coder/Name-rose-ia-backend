@@ -234,6 +234,9 @@ async function handle(env: Envelope): Promise<MessageResponse<unknown>> {
       };
       const policy = canUseAI(settings);
       if (!policy.allowed) return { ok: false, error: policy.reason };
+      // An empty request never reaches the provider, so blaming the provider
+      // configuration would send the operator chasing the wrong problem.
+      if (!text.trim()) return { ok: false, error: 'Nothing to translate.' };
 
       const translated = await getGeneration().translate(text, targetLanguage, tone);
       return translated
