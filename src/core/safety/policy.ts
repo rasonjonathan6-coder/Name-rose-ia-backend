@@ -28,11 +28,14 @@ export function canUseAI(settings: RoseSettings): PolicyCheck {
   const provider = chooseProvider(settings.ai);
   if (!provider) {
     const configured = settings.ai.providers.find((p) => p.id === settings.ai.activeProvider);
+    if (configured) {
+      // `label` is optional, so fall back to the id rather than leaking
+      // `undefined` into an error the operator has to read.
+      return { allowed: false, reason: `Provider "${configured.label ?? configured.id}" is disabled.` };
+    }
     return {
       allowed: false,
-      reason: configured
-        ? `Provider "${configured.label}" is disabled.`
-        : `Active AI provider "${settings.ai.activeProvider}" is not configured.`,
+      reason: `Active AI provider "${settings.ai.activeProvider}" is not configured.`,
     };
   }
   return { allowed: true };

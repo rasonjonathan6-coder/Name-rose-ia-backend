@@ -40,6 +40,10 @@ const NEGATIVE_INPUT_HINTS = /(search|recherche|find|filter|username|password|em
 // text so the model is not asked to answer a clock.
 const META_HINTS = /(^|[-_])(time|timestamp|date|meta|badge|status|delivered|read|seen|edited)([-_]|$)/i;
 
+// The author label. Reported separately as `author`, so it must not also be
+// folded into the message text.
+const AUTHOR_HINTS = /(^|[-_])(author|username|user|sender|nick|nickname|name|who|from)([-_]|$)/i;
+
 // Single-token direction markers. Chat UIs very commonly use just `in` / `out`,
 // which the substring hints above cannot express without matching every word
 // containing those two letters.
@@ -742,32 +746,39 @@ function classNameTokens(el: HTMLElement): string[] {
 
 /** Text held directly by the element, excluding nested block elements' text. */
 function directText(el: HTMLElement): string {
-  let out = '';
+  const pieces: string[] = [];
   for (const node of Array.from(el.childNodes)) {
-    if (node.nodeType === Node.TEXT_NODE) out += node.textContent ?? '';
-    else if (node.nodeType === Node.ELEMENT_NODE) {
-      const child = node as HTMLElement;
-      const tag = child.tagName;
-      if (tag === 'BR') continue;
-      // Timestamps and status badges are chrome, not the client's words.
-      // Folding them into the text sent to the model made replies answer
-      // "10:02" as if it were part of the message.
-      if (META_HINTS.test(child.className?.toString() ?? '')) continue;
-      // Inline children contribute to the same text run. Table cells are
-      // included because legacy chat widgets put each message in a single <td>,
-      // and without them the row looks textless and is never detected.
-      if (
-        /^(SPAN|B|I|EM|STRONG|A|CODE|SMALL|U|MARK|TIME|TD|TH|P|LABEL)$/.test(tag) &&
-        child.children.length === 0
-      ) {
-        // Separate with a space: adjacent inline runs would otherwise be
-        // concatenated into one word ("going?10:02").
-        const piece = normaliseText(child.textContent ?? '');
-        if (piece) out += (out ? ' ' : '') + piece;
-      }
+    if (node.nodeType === Node.TEXT_NODE) {
+      const piece = normaliseText(node.textContent ?? '');
+      if (piece) pieces.push(piece);
+      continue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+
+    const child = node as HTMLElement;
+    if (child.tagName === 'BR') continue;
+
+    const classes = child.className?.toString() ?? '';
+    // The author label is reported separately as `author`; leaving it in the
+    // text sent to the model produced prompts like "SophieDo you remember…",
+    // where the name ran straight into the client's words.
+    if (AUTHOR_HINTS.test(classes)) continue;
+    // Timestamps and status badges are chrome, not the client's words.
+    if (META_HINTS.test(classes)) continue;
+
+    // Inline children contribute to the same text run. Table cells are included
+    // because legacy chat widgets put each message in a single <td>, and without
+    // them the row looks textless and is never detected.
+    if (
+      /^(SPAN|B|I|EM|STRONG|A|CODE|SMALL|U|MARK|TIME|TD|TH|P|LABEL)$/.test(child.tagName) &&
+      child.children.length === 0
+    ) {
+      const piece = normaliseText(child.textContent ?? '');
+      if (piece) pieces.push(piece);
     }
   }
-  return normaliseText(out);
+  // Join with a space: adjacent runs would otherwise fuse into one word.
+  return normaliseText(pieces.join(' '));
 }
 
 function extractMessageText(el: HTMLElement): string {

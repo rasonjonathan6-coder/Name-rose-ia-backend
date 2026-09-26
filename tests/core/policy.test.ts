@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CooldownGate, RateLimiter, canUseAI, canUseAutomation, isAutoSendBlocked, sanitiseForExport } from '@/core/safety/policy';
-import { DEFAULT_SETTINGS } from '@/shared/settings';
+import { DEFAULT_SETTINGS, mergeSettings } from '@/shared/settings';
 import type { RoseSettings } from '@/shared/types';
 
 function settings(patch: Partial<RoseSettings> = {}): RoseSettings {
@@ -36,6 +36,25 @@ describe('canUseAI', () => {
     const s = settings();
     s.ai.activeProvider = 'nonexistent';
     expect(canUseAI(s).allowed).toBe(false);
+  });
+
+  it('names the provider id when a label is missing', () => {
+    // Found on the demo page: `label` is typed as required but settings can be
+    // hand-edited, imported from an older build, or synced from another device,
+    // so a provider can arrive without one. `mergeSettings` is the repair path
+    // real data takes, and the user-facing error used to read
+    // 'Provider "undefined" is disabled.'
+    const repaired = mergeSettings({
+      ai: {
+        acknowledgedPolicy: true,
+        activeProvider: 'legacy',
+        providers: [{ id: 'legacy', enabled: false, baseUrl: 'https://example.test/v1' }],
+      },
+    });
+    const res = canUseAI(repaired);
+    expect(res.allowed).toBe(false);
+    expect(res.reason).not.toContain('undefined');
+    expect(res.reason).toContain('legacy');
   });
 });
 

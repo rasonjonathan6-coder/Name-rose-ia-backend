@@ -149,6 +149,10 @@ export function normalizeSettings(settings: RoseSettings): RoseSettings {
 
   settings.ai.providers = (settings.ai.providers ?? []).map((p) => ({
     ...p,
+    // Providers are shown by label in every error message and in the Options
+    // list. A provider synced from an older build can arrive without one, which
+    // surfaced as 'Provider "undefined" is disabled.' Fall back to the id.
+    label: typeof p.label === 'string' && p.label.trim() ? p.label : String(p.id ?? 'Provider'),
     temperature: num(p.temperature, 0.85, 0, 2),
     maxTokens: Math.round(num(p.maxTokens, 320, 1, 32_000)),
   }));

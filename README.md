@@ -18,7 +18,7 @@ platform in a browser.
 
 | Feature | Implemented | Tested | Works in production |
 | --- | --- | --- | --- |
-| Generic detector / heuristics | yes | yes (59 detection tests + 6-shape browser harness) | yes on the local demo harness |
+| Generic detector / heuristics | yes | yes (60 detection tests + 6-shape browser harness) | yes on the local demo harness |
 | Chat / message detection | yes | yes (E2E + adapter tests + 6-shape browser harness) | yes on the local demo harness |
 | Reply-field detection + text insertion | yes | yes (E2E insertion tests) | yes on the local demo harness |
 | AI generation (OpenAI-compatible / OpenRouter) | yes | yes (37 generation + 18 client tests) | against a real HTTP server in tests; not billed against a live provider in CI |
@@ -94,7 +94,7 @@ scripts and UI pages talk to it exclusively through typed RPC (`src/shared/rpc.t
 ```bash
 npm install          # install dependencies
 npm run typecheck    # TypeScript, no emit
-npm test             # full Vitest suite (307 tests)
+npm test             # full Vitest suite (328 tests)
 npm run build        # development build -> dist/
 npm run build:prod   # minified production build -> dist/
 npm run verify       # typecheck + tests + build, in one shot
@@ -209,5 +209,5 @@ the generic heuristics are not enough.
 | `npm test` | Full test suite |
 | `npm run typecheck` | TypeScript check |
 | `npm run verify` | typecheck + test + build |
-| `npm run verify:browser` | Loads the built extension in headless Chrome and drives the real pages (needs `npm run build` first) |
+| `npm run verify:browser` | Starts its own mock server and drives all three phases (install, generic detection, demo) in headless Chrome. Needs `npm run build` first |
 | `npm run demo` | Build and serve the local demo |

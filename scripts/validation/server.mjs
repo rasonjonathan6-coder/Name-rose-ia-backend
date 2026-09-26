@@ -114,18 +114,33 @@ async function handleCompletion(req, res) {
     return;
   }
 
-  // Distinguish the secondary tasks (summary / facts) from reply generation by
-  // looking at the system prompt, so each path gets a plausible answer.
+  // Route on the distinctive opening line of each system prompt. Matching on
+  // loose words like "fact" is wrong: the generation prompt contains the rule
+  // "Do not invent personal facts", so it was misclassified as fact extraction
+  // and the generation call was answered with a fact payload — which made ROSE
+  // look broken when the provider was the thing lying.
   const system = String(body.messages?.[0]?.content ?? '');
   let text;
-  if (/summar/i.test(system)) {
-    text = JSON.stringify({ summary: 'Client asked where the operator is from. Operator lives in Lyon.' });
-  } else if (/fact|extract/i.test(system)) {
-    text = JSON.stringify({ facts: ['Lives in Lyon'], topics: ['location'] });
-  } else if (/translat/i.test(system)) {
-    text = JSON.stringify({ text: 'Salut, comment vas-tu ?', lang: 'fr' });
+  if (/You compress chat history/.test(system)) {
+    // Summary: plain prose, not JSON.
+    text = 'The client asked whether the operator remembers their cat. No personal facts confirmed yet.';
+  } else if (/You extract durable personal facts/.test(system)) {
+    // Facts: a JSON array of {key,value,weight}, which is what extractFacts reads.
+    text = JSON.stringify([
+      { key: 'pet', value: 'Has a cat', weight: 0.9 },
+      { key: 'city', value: 'Lyon', weight: 0.7 },
+    ]);
+  } else if (/You are a professional translator/.test(system)) {
+    // Translation: plain translated text, not JSON.
+    text = 'Salut, comment vas-tu ?';
   } else {
-    text = JSON.stringify({ suggestions: aiBehaviour.replies });
+    text = JSON.stringify({
+      suggestions: [
+        { kind: 'natural', text: aiBehaviour.replies[0] },
+        { kind: 'warm', text: aiBehaviour.replies[1] },
+        { kind: 'engaging', text: aiBehaviour.replies[2] },
+      ],
+    });
   }
 
   json(res, 200, completion(text, body.model));
@@ -176,6 +191,21 @@ export function startServer(port = AI_PORT) {
       if (patch.status) aiBehaviour.status = Number(patch.status);
       if (patch.delayMs) aiBehaviour.delayMs = Number(patch.delayMs);
       json(res, 200, { ok: true, behaviour: aiBehaviour });
+      return;
+    }
+
+    // Demo harness, built by `npm run build` into dist/demo/. Served from the
+    // same origin as the fixtures so it exercises the real content script.
+    if (url.pathname.startsWith('/demo/')) {
+      const demoRoot = path.resolve(here, '..', '..', 'dist');
+      const demoFile = path.join(demoRoot, path.normalize(url.pathname).replace(/^(\.\.[/\\])+/, ''));
+      if (!demoFile.startsWith(demoRoot) || !fs.existsSync(demoFile) || fs.statSync(demoFile).isDirectory()) {
+        res.writeHead(404, { 'content-type': 'text/plain' });
+        res.end('demo not built — run `npm run build`');
+        return;
+      }
+      res.writeHead(200, { 'content-type': MIME[path.extname(demoFile)] ?? 'application/octet-stream' });
+      fs.createReadStream(demoFile).pipe(res);
       return;
     }
 

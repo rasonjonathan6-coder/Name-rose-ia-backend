@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit",
     "demo": "npm run build && node scripts/serve-demo.mjs",
     "verify": "npm run typecheck && npm run test && npm run build",
-    "verify:browser": "node scripts/validation/phase1-install.mjs && node scripts/validation/phase2-generic.mjs"
+    "verify:browser": "node scripts/validation/run-all.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

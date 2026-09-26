@@ -73,6 +73,19 @@ describe('normalizeSettings — malformed input cannot crash the UI', () => {
     expect(Array.isArray(s.ai.providers)).toBe(true);
     expect(s.ai.providers.length).toBeGreaterThan(0);
   });
+
+  it('repairs a provider with no label', () => {
+    // Regression found on the demo page: `label` is typed as required, but a
+    // provider synced from an older build can arrive without one. Every error
+    // message and the Options provider list interpolate it, so the user saw
+    // 'Provider "undefined" is disabled.'
+    const s = mergeSettings({
+      ai: { providers: [{ id: 'legacy', baseUrl: 'https://x', model: 'm' }] },
+    });
+    const provider = s.ai.providers.find((p) => p.id === 'legacy')!;
+    expect(provider.label).toBe('legacy');
+    expect(provider.label).not.toContain('undefined');
+  });
 });
 
 describe('deepMerge', () => {

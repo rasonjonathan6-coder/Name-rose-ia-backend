@@ -44,14 +44,30 @@ permissions are defined there, not in a checked-in manifest.
   always reports false. Use `browser.evalIsolated` / `waitForIsolated` in
   `scripts/cdp.mjs` for anything touching `chrome.*` or the content script's
   `window.ROSE_IA`.
-- Browser validation is two phases: `node scripts/validation/phase1-install.mjs`
-  (extension surfaces) and `node scripts/validation/phase2-generic.mjs`
-  (detector + injection against six fixture shapes in
-  `scripts/validation/fixtures/`). `scripts/validation/probe-container.mjs`
-  prints which container/messages the adapter resolves on a fixture — use it
-  first when detection misbehaves.
+- Browser validation runs via `npm run verify:browser`, which starts its own
+  mock server, runs all three phases, and shuts the server down:
+  `phase1-install.mjs` (extension surfaces), `phase2-generic.mjs` (detector +
+  injection against six fixture shapes in `scripts/validation/fixtures/`), and
+  `phase3-demo.mjs` (the built extension driving `demo/demo.html` end to end).
+  `scripts/validation/probe-container.mjs` prints which container/messages the
+  adapter resolves on a fixture — use it first when detection misbehaves.
+  The runner refuses to start if something already holds port 8788, because a
+  leftover server serves the previous build and makes a green run meaningless.
+- **The mock provider in `scripts/validation/server.mjs` must mirror the real
+  prompt contracts**, not just return plausible JSON. It once routed on the word
+  "fact", which also appears in the generation prompt's own rule "Do not invent
+  personal facts" — so reply generation was answered with a fact-extraction
+  payload and ROSE was blamed for a bug that lived in the harness. Route on the
+  distinctive opening line of each system prompt, and match the shapes the
+  parsers read: summary and translation are plain text, facts are a JSON array
+  of `{key,value,weight}`, suggestions are `{suggestions:[{kind,text}]}`.
+- **The request records store `messages`, not a raw `body`.** Asserting against a
+  `body` field silently passes a `JSON.stringify(undefined)` and reads as "the
+  prompt was empty" when it was fine.
 - Every bug the browser harness finds should also get a jsdom test in
-  `tests/platforms/detection.test.ts` so it fails in `npm test` too.
+  `tests/platforms/detection.test.ts` so it fails in `npm test` too. Verify the
+  new test actually fails against the unfixed code — a regression test that
+  cannot fail is worse than none.
 
 ## Domain invariants
 
@@ -68,6 +84,10 @@ permissions are defined there, not in a checked-in manifest.
 - **Memory functions take a `ConversationRef`, not a `ClientMemory`.**
   `getOrCreate(ref)` returns the memory; pass the *ref* to `recordIncoming` /
   `recordOutgoing`.
+- **`normalizeSettings` is the repair path for malformed settings.** Anything
+  typed as required can still arrive absent from hand-edited, imported or synced
+  settings. Repair it there rather than defending at each use site: a provider
+  without `label` reached the UI as `Provider "undefined" is disabled.`
 - `recordIncoming` / `recordOutgoing` require an explicit `language` argument.
 - `AutomationStateMachine.dispatch(event, guards)` takes a full `GuardInput`
   (`contentAllowed`, `rateAllowed`, `cooldownReady`, `policyAllowed`) and

@@ -357,6 +357,20 @@ describe('GenericChatAdapter — regressions caught in a real browser', () => {
     }
     expect(adapter.getMessages(document)).toEqual([]);
   });
+
+  it('keeps the author name out of the message text', () => {
+    // Found on the demo page: the author span was folded into the text, so the
+    // model was sent "SophieDo you remember my cat?" and the name ran straight
+    // into the client's words. The author is reported separately as `author`.
+    document.body.innerHTML = `
+      <div class="log" id="log" role="log">
+        <div class="msg in" data-message-id="demo-1"><span class="author">Sophie</span>Do you remember my cat?<span class="time">10:02</span></div>
+      </div>
+      <textarea placeholder="message"></textarea>`;
+    const messages = new GenericChatAdapter().getMessages(document);
+    expect(messages[0]!.text).toBe('Do you remember my cat?');
+    expect(messages[0]!.author).toBe('Sophie');
+  });
 });
 
 // ---------------------------------------------------------------------------
