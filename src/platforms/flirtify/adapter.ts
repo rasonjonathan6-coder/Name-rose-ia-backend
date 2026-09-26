@@ -68,6 +68,9 @@ export class FlirtifyAdapter extends GenericChatAdapter {
       displayName,
       clientId,
       id: `${this.id}:${clientId}`,
+      // Keyed off the slug, not the document URL: the base resolver returns the
+      // raw href, which is unstable (query strings, trailing slashes) and made
+      // the same conversation look like a different one after a navigation.
       conversationId: slug ? `flirtify-${slug}` : base.conversationId,
       url: href,
     };

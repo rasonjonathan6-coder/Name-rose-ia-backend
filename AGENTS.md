@@ -209,6 +209,29 @@ Two harness rules, both learned the hard way:
 The mirror is keyed `tabId:frameId` in the background; the renderer only accepts a
 snapshot whose `fromFrameId` matches the `mirrorFor` it was told to mirror.
 
+## Phase 8 live re-validation
+
+No authenticated Chromium profile exists in this environment (the only two cookie
+stores present are empty), so CooMeet/Flirtify chat could not be driven end to
+end. Guest probing on Flirtify's `/shorts` feed exposed two real bugs, both fixed
+and re-verified live:
+
+- **An aria-live route announcer was treated as a message log.** SvelteKit renders
+  `<div id="svelte-announcer" aria-live="assertive">` on every page. Phase 7's rule
+  ("declared container" = role=log *or* aria-live *or* messages/chat class) trusted
+  it, so `/shorts` reported a conversation with `clientId: "shorts"` on a page that
+  has no chat. Fix: `NON_CONTAINER_ARIA_LIVE` excludes announcer/visually-hidden/SR
+  live regions, and bare `aria-live` is accepted only when the element also names
+  itself as a log or is an explicit `role="log"`.
+- **`feed` and `stream` were standalone `MESSAGE_CONTAINER_HINTS`.** Flirtify's feed
+  wrapper is `<div class="feed">`. Those words mean a content/video feed much more
+  often than a message log, so they were removed as standalone hints;
+  `chat-…-feed` / `chat-…-stream` still match.
+
+Lesson for future adapters: any heuristic that accepts a signal "on its own"
+(a bare `aria-live`, a bare word like `feed`) will eventually match page chrome
+that always exists on that site. Require a second, log-specific signal.
+
 ## Phase 7 live recon (CooMeet + Flirtify)
 
 Real Chromium, built extension, public guest access only. What it established:

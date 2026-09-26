@@ -22,14 +22,27 @@ const INPUT_HINTS =
 
 const SEND_HINTS = /^(send|envoyer|senden|enviar|отправить|发送|送信|submit|➤|➔|▶)$/i;
 
+// `feed` and `stream` are deliberately absent: they describe content/video feeds
+// far more often than a message log. Found live — Flirtify's `/shorts` wraps its
+// swipe feed in `<div class="feed">`, which matched here and made ROSE treat a
+// chat-less page as a conversation.
 const MESSAGE_CONTAINER_HINTS =
-  /(messages?|chat[-_]?(log|list|body|history|window|messages|content|thread|feed|stream)|conversation|dialog|timeline|history|transcript|feed)/i;
+  /(messages?|chat[-_]?(log|list|body|history|window|messages|content|thread|feed|stream)|conversation|dialog|timeline|history|transcript)/i;
 
 // Navigation and control surfaces that score like a message list purely because
 // they are repeated-child lists with "list"/"menu" in the name. Found live on
 // flirtify.com: the language picker `ul.language-dropdown__list` was returned as
 // the message container. A real message log is never classed "dropdown"/"navbar".
 const NON_CONTAINER_HINTS = /(dropdown|nav[-_]?bar|navbar|breadcrumb|menu|tab[-_]?list|accordion|carousel|pagination|toolbar)/i;
+
+// Accessible-live regions that are NOT message logs. SvelteKit renders
+// `<div id="svelte-announcer" aria-live="assertive">` on every page to announce
+// route changes, and Next.js has an equivalent. Found live on Flirtify's
+// `/shorts` feed: because Phase 7 taught `pickContainer` to trust `aria-live`,
+// this announcer was returned as the message container — and since it always
+// exists, `getConversation` then reported a conversation on a page that has no
+// chat at all. A real log carries a messages/chat signal as well; these do not.
+const NON_CONTAINER_ARIA_LIVE = /(announcer|route[-_]?announcer|live[-_]?region|visually[-_]?hidden|sr[-_]?only|screen[-_]?reader)/i;
 
 const INCOMING_HINTS =
   /(incoming|inbound|received|them|other|partner|client|stranger|guest|peer|left|remote|message[-_]?in)/i;
@@ -336,11 +349,17 @@ export class GenericChatAdapter extends BaseAdapter {
    * (scrollability, repeated children) that page chrome can also satisfy.
    */
   private isDeclaredContainer(el: Element): boolean {
-    if (el.getAttribute('role') === 'log' || el.getAttribute('aria-live')) return true;
     const attr = [el.id, el.className?.toString(), el.getAttribute('data-testid'), el.getAttribute('aria-label')]
       .filter(Boolean)
       .join(' ');
-    return MESSAGE_CONTAINER_HINTS.test(attr);
+    // An announce-only live region is not a log even though it is aria-live.
+    if (NON_CONTAINER_ARIA_LIVE.test(attr)) return false;
+    // `aria-live` alone is a weak signal — SvelteKit/Next.js put it on a
+    // route-change announcer that exists on every page. Accept it only when the
+    // element also names itself as a log, or when it is an explicit role=log.
+    if (el.getAttribute('role') === 'log') return true;
+    if (MESSAGE_CONTAINER_HINTS.test(attr)) return true;
+    return !!el.getAttribute('aria-live') && el.children.length > 0;
   }
 
   /** Message-shaped elements inside a candidate container. */
@@ -374,6 +393,9 @@ export class GenericChatAdapter extends BaseAdapter {
       // A language picker is a list of repeated children and outscores an empty
       // message log on structure alone, so rule these out before scoring.
       if (NON_CONTAINER_HINTS.test(attr)) continue;
+      // Route-change announcers are aria-live on every page; they must never be
+      // treated as a log (see NON_CONTAINER_ARIA_LIVE).
+      if (NON_CONTAINER_ARIA_LIVE.test(attr)) continue;
 
       const declaredContainer =
         el.getAttribute('role') === 'log' || !!el.getAttribute('aria-live') || MESSAGE_CONTAINER_HINTS.test(attr);
@@ -783,6 +805,9 @@ const RESERVED_SLUGS = new Set([
   'chat', 'chats', 'user', 'users', 'room', 'rooms', 'profile', 'profiles',
   'model', 'models', 'conversation', 'conversations', 'messages', 'message',
   'index', 'home', 'login', 'signup', 'register', 'settings', 'app', 'www',
+  // Feed routes: a page whose last path segment is one of these is a listing,
+  // not a conversation, so it must never become a client id.
+  'shorts', 'stories', 'favorites', 'feed', 'explore', 'search',
 ]);
 
 // ---------------------------------------------------------------------------

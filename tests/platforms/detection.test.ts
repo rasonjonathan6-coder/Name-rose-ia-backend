@@ -776,6 +776,22 @@ describe('FlirtifyAdapter', () => {
     expect(container?.className).toContain('messagesWrapper');
     expect(adapter.getMessages(document)).toEqual([]);
   });
+
+  it('does not treat a SvelteKit route announcer as a chat, even though it is aria-live', () => {
+    // Found live on https://flirtify.com/shorts (a feed page reached by redirect
+    // from a stream that is not live). SvelteKit renders
+    // `<div id="svelte-announcer" aria-live="assertive">` on every page. Phase 7
+    // taught the container picker to trust `aria-live`, so this announcer was
+    // returned as the message log and — because it always exists — ROSE reported a
+    // conversation on a page with no chat, identifying the client as "shorts".
+    setUrl('https://flirtify.com/shorts');
+    document.body.innerHTML = `
+      <div id="svelte-announcer" aria-live="assertive"></div>
+      <div class="feed"><h1 class="_displayName_13nw5_41">mementomori</h1></div>`;
+    const adapter = new FlirtifyAdapter();
+    expect(adapter.getMessageContainer(document)).toBeNull();
+    expect(adapter.getConversation(document)).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

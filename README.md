@@ -55,6 +55,34 @@ because its public stream pages expose the real chat DOM to a guest:
 
 See "Phase 7 live recon" below for the exact evidence and what remains unproven.
 
+### Phase 8 live re-validation
+
+Phase 8 re-probed both platforms on the current build. **No authenticated Chromium
+profile exists in this environment** — the only two cookie stores present are
+empty (0 hosts each), so CooMeet's and Flirtify's chat remain behind sign-in and
+could not be driven end to end. No session was simulated.
+
+Guest probing did surface and fix two real regressions on Flirtify, both verified
+live afterwards:
+
+- **A SvelteKit route announcer was read as a chat.** `/shorts` (a swipe feed
+  reached by redirect when a stream is not live) renders
+  `<div id="svelte-announcer" aria-live="assertive">`. The Phase 7 rule that
+  trusted `aria-live` therefore returned it as the message log, and because it
+  always exists ROSE reported a conversation on a chat-less page — with the
+  client identified as "shorts". Announcers/visually-hidden live regions are now
+  excluded, and `aria-live` alone is only accepted when the element also names
+  itself as a log (or is an explicit `role="log"`). Live: `/shorts` now reports
+  `conversation: null`.
+- **`feed`/`stream` were standalone container hints.** Flirtify's feed wrapper is
+  `<div class="feed">`; those words describe content/video feeds far more often
+  than a message log, so they were dropped as standalone hints. `chat-…-feed` and
+  `chat-…-stream` still match.
+
+`/streams/<slug>` continues to resolve correctly (`Night Queen Megha`,
+`flirtify-megha_83`, `div._messagesWrapper_*`), confirming Phase 7 was not
+regressed.
+
 ### Phase 7 live recon (no authenticated session available)
 
 Both sites were probed in a real Chromium with the built extension loaded, using
