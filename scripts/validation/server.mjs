@@ -23,6 +23,15 @@ const fixturesDir = path.join(here, 'fixtures');
 
 export const AI_PORT = Number(process.env.AI_PORT ?? 8788);
 
+/**
+ * Origin of the cross-origin chat frame for fixture G.
+ *
+ * Kept separate from the shell's port so the browser treats the frame as a
+ * genuinely different origin. That is what makes the test meaningful: the parent
+ * cannot reach into the frame, so only the service worker can bridge them.
+ */
+export const CHAT_FRAME_PORT = Number(process.env.CHAT_FRAME_PORT ?? 8789);
+
 /** Every AI request ROSE made, newest last. */
 export const aiRequests = [];
 
@@ -226,8 +235,47 @@ export function startServer(port = AI_PORT) {
   });
 }
 
+/**
+ * A second origin for the iframe fixture.
+ *
+ * The whole point of fixture G is that the chat frame is *cross-origin* relative
+ * to the shell that embeds it, like www.coomeet.com embedding
+ * iframe.coomeet.com. Serving both from one port would make the frame
+ * same-origin and the test would prove nothing.
+ *
+ * This server deliberately exposes no AI endpoint and no control plane: it only
+ * exists to give the chat frame a different origin.
+ */
+export function startChatFrameServer(port = 8789) {
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
+    const rel = url.pathname === '/' ? '/index.html' : url.pathname;
+    const file = path.join(fixturesDir, path.normalize(rel).replace(/^(\.\.[/\\])+/, ''));
+    if (!file.startsWith(fixturesDir) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('not found');
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
+      // The shell and this origin differ only by port, which is enough for the
+      // browser to treat them as separate origins, but not enough for a default
+      // `X-Frame-Options`/CSP to matter. Nothing here needs framing headers.
+    });
+    fs.createReadStream(file).pipe(res);
+  });
+
+  return new Promise((resolve) => {
+    server.listen(port, '127.0.0.1', () => resolve(server));
+  });
+}
+
 // Run standalone: `node scripts/validation/server.mjs`
 if (process.argv[1] && process.argv[1].endsWith('server.mjs')) {
   await startServer();
+  // The chat frame of fixture G must be on a *different* origin from its shell,
+  // otherwise the frame is same-origin and the cross-origin path goes untested.
+  await startChatFrameServer(CHAT_FRAME_PORT);
   process.stdout.write(`[validation] fixtures + mock AI on http://127.0.0.1:${AI_PORT}/\n`);
+  process.stdout.write(`[validation] cross-origin chat frame on http://127.0.0.1:${CHAT_FRAME_PORT}/\n`);
 }

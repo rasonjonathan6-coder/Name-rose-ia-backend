@@ -118,7 +118,7 @@ try {
     `buttons=${JSON.stringify(after?.buttons)}`,
   );
 
-  // Clicking Enable must go through ROSE's real enableSite path. The permission
+  // Clicking Enable must go through ROSE's real activateSite path. The permission
   // is seeded first because Chrome's native prompt cannot be answered from here.
   const { seedHostPermission } = await import('./helpers.mjs');
   await browser.close();
@@ -134,14 +134,14 @@ try {
     `(async () => {
        try {
          return await chrome.runtime.sendMessage({
-           type: 'rose/site/enable',
+           type: 'rose/site/activate',
            payload: { host: ${JSON.stringify(host)} },
            requestId: 'popup-flow-' + Date.now(),
          });
        } catch (e) { return { error: String(e && e.message || e) }; }
      })()`,
   );
-  checks.add('enableSite succeeds with the grant in place', enabled?.ok === true, JSON.stringify(enabled));
+  checks.add('activateSite succeeds with the grant in place', enabled?.ok === true, JSON.stringify(enabled));
 
   const regs = await browser2.eval(
     popup3,

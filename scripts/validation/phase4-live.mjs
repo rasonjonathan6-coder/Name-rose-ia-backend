@@ -171,8 +171,8 @@ try {
       // come from an *extension page*: sending it from the page itself needs a
       // content script, which is exactly what activation is meant to create.
       // Seeding the permission reproduces what Chrome's native prompt would have
-      // granted, so `enableSite` skips `permissions.request` and does its real
-      // work — register the dynamic content script, then inject into the tab.
+      // granted, so `activateSite` does its real post-grant work — register the
+      // dynamic content script, then inject into the tab.
       const extPage = await browser.newPage('about:blank');
       await extPage.send('Page.navigate', { url: `chrome-extension://${report.extensionId}/options/options.html` });
       await sleep(2000);
@@ -193,7 +193,7 @@ try {
             `(async () => {
                try {
                  return await chrome.runtime.sendMessage({
-                   type: 'rose/site/enable',
+                   type: 'rose/site/activate',
                    payload: { host: ${JSON.stringify(host)} },
                    requestId: 'phase4-' + Date.now(),
                  });

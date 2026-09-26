@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { PlatformDetector, matchHost } from '@/platforms/detector';
 import { documentUrl } from '@/platforms/types';
 import { GenericChatAdapter } from '@/platforms/generic/adapter';
-import { DEMO_CONFIG, COOMEET_CONFIG, FLIRTIFY_CONFIG } from '@/platforms/generic/config';
+import { DEMO_CONFIG, COOMEET_CONFIG, FLIRTIFY_CONFIG, BUILTIN_CONFIGS } from '@/platforms/generic/config';
 import { DemoAdapter } from '@/platforms/generic/demo-adapter';
 import { CooMeetAdapter } from '@/platforms/coomeet/adapter';
 import { FlirtifyAdapter } from '@/platforms/flirtify/adapter';
@@ -130,6 +130,101 @@ describe('GenericChatAdapter — reply field detection', () => {
   it('returns null when there is no plausible field', () => {
     document.body.innerHTML = `<div>Just some text</div>`;
     expect(new GenericChatAdapter().getInput(document)).toBeNull();
+  });
+
+  // Regression guards for over-broad negative hints. The genuine reproductions
+  // are the `code` and `find` cases below: a composer with neither a positive
+  // chat keyword nor any geometry was rejected outright. The others pin the
+  // behaviour the task specified so a future edit cannot silently regress it.
+  it('accepts a composer whose `name` attribute merely contains "name"', () => {
+    document.body.innerHTML = `<textarea name="chatMessage" placeholder="..."></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.getAttribute('name')).toBe('chatMessage');
+  });
+
+  it('accepts a composer with name="message"', () => {
+    document.body.innerHTML = `<textarea name="message"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.getAttribute('name')).toBe('message');
+  });
+
+  it('accepts a composer with name="chatInput"', () => {
+    document.body.innerHTML = `<textarea name="chatInput"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.getAttribute('name')).toBe('chatInput');
+  });
+
+  it('accepts a composer whose testid contains "code"', () => {
+    // `editor-code` matched the old over-broad `code` hint and, with no positive
+    // chat keyword in the attributes, the field was rejected outright.
+    document.body.innerHTML = `<textarea aria-label="Compose" data-testid="editor-code"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.getAttribute('data-testid')).toBe('editor-code');
+  });
+
+  it('accepts a composer whose class contains "find"', () => {
+    // Same shape as the `code` case: `composer-finder` tripped the old `find`
+    // hint and had no positive chat keyword to rescue it.
+    document.body.innerHTML = `<textarea class="composer-finder"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.className).toContain('composer-finder');
+  });
+
+  it('a positive chat hint still wins over a negative substring', () => {
+    // "Send a message with your name" is a chat prompt, not an identity field.
+    document.body.innerHTML = `<textarea placeholder="Send a message with your name"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)).not.toBeNull();
+  });
+
+  it('still rejects a password field', () => {
+    document.body.innerHTML = `
+      <input type="password" name="password" placeholder="Password" />
+      <textarea placeholder="Type a message"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.tagName).toBe('TEXTAREA');
+  });
+
+  it('still rejects an email field', () => {
+    document.body.innerHTML = `
+      <input type="text" name="email" placeholder="Your email" />
+      <textarea placeholder="Type a message"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.tagName).toBe('TEXTAREA');
+  });
+
+  it('still rejects a login field', () => {
+    document.body.innerHTML = `
+      <input type="text" name="login" placeholder="Login" />
+      <textarea placeholder="Type a message"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.tagName).toBe('TEXTAREA');
+  });
+
+  it('still rejects a captcha field', () => {
+    document.body.innerHTML = `
+      <input type="text" name="captcha" placeholder="Enter the code" />
+      <textarea placeholder="Type a message"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.tagName).toBe('TEXTAREA');
+  });
+
+  it('still rejects a username field', () => {
+    document.body.innerHTML = `
+      <input type="text" name="username" placeholder="Username" />
+      <textarea placeholder="Type a message"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.tagName).toBe('TEXTAREA');
+  });
+
+  it('still rejects a phone field', () => {
+    document.body.innerHTML = `
+      <input type="text" name="phone" placeholder="Phone number" />
+      <textarea placeholder="Type a message"></textarea>`;
+    expect(new GenericChatAdapter().getInput(document)?.tagName).toBe('TEXTAREA');
+  });
+
+  it('rejects a standalone search field when nothing else exists', () => {
+    document.body.innerHTML = `<input type="search" placeholder="Search" />`;
+    expect(new GenericChatAdapter().getInput(document)).toBeNull();
+  });
+
+  it('a chat composer wins over a search box on the same page', () => {
+    document.body.innerHTML = `
+      <input type="search" placeholder="Find a conversation" />
+      <textarea name="chatMessage" placeholder="Write here"></textarea>`;
+    const input = new GenericChatAdapter().getInput(document);
+    expect(input?.tagName).toBe('TEXTAREA');
+    expect(input?.getAttribute('name')).toBe('chatMessage');
   });
 
   it('never returns ROSE\'s own UI as the reply field', () => {
@@ -772,5 +867,205 @@ describe('built-in site configs', () => {
       <textarea aria-label="Your message"></textarea>`;
     const adapter = new CooMeetAdapter();
     expect(adapter.getInput(document)).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Detector — the real content-script path
+//
+// Regression guard for the production bug where the content script passed
+// BUILTIN_CONFIGS to setUserConfigs(). That made the detector treat the shipped
+// CooMeet/Flirtify configs as *user* configs, which short-circuit to score 1 and
+// instantiate a GenericChatAdapter — so `platform=generic confidence=1` even on
+// coomeet.com, and the dedicated adapters never ran.
+//
+// The earlier tests above only ever built `new PlatformDetector()` and never
+// called setUserConfigs, which is exactly why the bug escaped.
+// ---------------------------------------------------------------------------
+
+describe('PlatformDetector — built-in configs are not user configs', () => {
+  it('still picks CooMeet when the built-in configs are registered as built-ins', () => {
+    setUrl('https://coomeet.com/chat');
+    document.body.innerHTML = `
+      <div class="video-chat" data-partner-id="p1"><div class="partner-name">Anna</div></div>
+      <div class="chat-messages"><div class="message incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+
+    const detector = new PlatformDetector();
+    detector.registerBuiltinConfigs(BUILTIN_CONFIGS);
+
+    const report = detector.detect(document);
+    expect(report.platform).toBe('coomeet');
+    // The real regression signal: a shipped config must never be treated as an
+    // operator-authored one.
+    expect(report.notes.join(' ')).not.toContain('user config');
+    // ...and the dedicated adapter must be what actually runs.
+    expect(detector.resolve(document).id).toBe('coomeet');
+  });
+
+  it('a dedicated adapter wins the tie against a generic config adapter', () => {
+    // This is the exact shape of the production bug. CooMeetAdapter legitimately
+    // scores 1.0 on a recognised shell; the old user-config tier *also* pushed a
+    // GenericChatAdapter at 1.0, and because it was pushed first, a stable sort
+    // made generic win — hence `platform=generic confidence=1` on coomeet.com.
+    setUrl('https://coomeet.com/chat');
+    document.body.innerHTML = `
+      <div class="video-chat" data-partner-id="p1"><div class="partner-name">Anna</div></div>
+      <div class="chat-messages"><div class="message incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+
+    const detector = new PlatformDetector();
+    detector.registerBuiltinConfigs(BUILTIN_CONFIGS);
+
+    // Repeat because a tie broken by insertion order is order-sensitive.
+    for (let i = 0; i < 5; i++) {
+      expect(detector.detect(document).platform).toBe('coomeet');
+    }
+  });
+
+  it('the generic adapter alone cannot report confidence 1', () => {
+    // Guards the diagnostic invariant: `platform=generic confidence=1` in the
+    // logs could only ever have come from the user-config short-circuit, never
+    // from the heuristics.
+    setUrl('https://unknown-chat.example/room');
+    document.body.innerHTML = `
+      <div class="messages" role="log"><div>a</div><div>b</div><div>c</div></div>
+      <textarea placeholder="Type a message"></textarea>`;
+    const report = new GenericChatAdapter().score(document);
+    expect(report).toBeLessThanOrEqual(0.9);
+  });
+
+  it('still picks Flirtify when the built-in configs are registered as built-ins', () => {
+    setUrl('https://flirtify.com/profile/x1');
+    document.body.innerHTML = `
+      <div class="profile-name">X</div>
+      <div class="chat__messages"><div class="message incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+
+    const detector = new PlatformDetector();
+    detector.registerBuiltinConfigs(BUILTIN_CONFIGS);
+    expect(detector.detect(document).platform).toBe('flirtify');
+  });
+
+  it('picks the demo adapter on localhost when built-in configs are registered', () => {
+    setUrl('http://localhost:5173/demo/demo.html');
+    document.body.innerHTML = `
+      <div id="demo-messages"><div data-dir="in">hi</div></div>
+      <textarea id="demo-input"></textarea>`;
+
+    const detector = new PlatformDetector();
+    detector.registerBuiltinConfigs(BUILTIN_CONFIGS);
+    expect(detector.detect(document).platform).toBe('demo');
+  });
+
+  it('falls back to generic on an unknown site when built-in configs are registered', () => {
+    setUrl('https://unknown-chat.example/room');
+    document.body.innerHTML = `
+      <div class="messages" role="log"><div>a</div><div>b</div><div>c</div></div>
+      <textarea placeholder="Type a message"></textarea>`;
+
+    const detector = new PlatformDetector();
+    detector.registerBuiltinConfigs(BUILTIN_CONFIGS);
+    expect(detector.detect(document).platform).toBe('generic');
+  });
+
+  it('an explicit user config still wins over the built-ins', () => {
+    setUrl('https://my-custom-site.test/chat');
+    document.body.innerHTML = `
+      <div id="custom-messages"><div class="in">hello</div></div>
+      <textarea id="custom-input"></textarea>`;
+    setRect(document.querySelector('#custom-input')!, { top: 600, left: 300, width: 400, height: 40 });
+
+    const detector = new PlatformDetector();
+    detector.registerBuiltinConfigs(BUILTIN_CONFIGS);
+    detector.setUserConfigs([
+      {
+        hosts: ['my-custom-site.test'],
+        messageContainer: ['#custom-messages'],
+        incomingMessage: ['.in'],
+        input: ['#custom-input'],
+      },
+    ]);
+
+    const report = detector.detect(document);
+    expect(report.platform).toBe('generic');
+    expect(report.confidence).toBeGreaterThanOrEqual(0.95);
+    expect(report.notes.join(' ')).toContain('user config');
+  });
+
+  it('a user config for a built-in host is still honoured (user knows best)', () => {
+    setUrl('https://coomeet.com/chat');
+    document.body.innerHTML = `
+      <div id="my-messages"><div class="in">hello</div></div>
+      <textarea id="my-input"></textarea>`;
+    setRect(document.querySelector('#my-input')!, { top: 600, left: 300, width: 400, height: 40 });
+
+    const detector = new PlatformDetector();
+    detector.registerBuiltinConfigs(BUILTIN_CONFIGS);
+    detector.setUserConfigs([
+      { hosts: ['coomeet.com'], messageContainer: ['#my-messages'], input: ['#my-input'] },
+    ]);
+
+    const report = detector.detect(document);
+    expect(report.notes.join(' ')).toContain('user config');
+    expect(report.confidence).toBeGreaterThanOrEqual(0.95);
+  });
+
+  it('the dedicated adapter is what `resolve()` returns on CooMeet', () => {
+    setUrl('https://coomeet.com/chat');
+    document.body.innerHTML = `
+      <div class="video-chat" data-partner-id="p1"><div class="partner-name">Anna</div></div>
+      <div class="chat-messages"><div class="message incoming">hi</div></div>
+      <textarea placeholder="message"></textarea>`;
+
+    const detector = new PlatformDetector();
+    detector.registerBuiltinConfigs(BUILTIN_CONFIGS);
+    expect(detector.resolve(document).id).toBe('coomeet');
+  });
+});
+
+describe('architectural guard: shipped configs never go through setUserConfigs', () => {
+  /**
+   * `setUserConfigs` is the operator-priority tier and short-circuits to score 1.
+   * Routing the shipped BUILTIN_CONFIGS through it is what produced
+   * `platform=generic confidence=1` on coomeet.com in production. A comment is
+   * not enough to stop that being reintroduced, so this scans the source.
+   */
+  it('no source file passes BUILTIN_CONFIGS (or a built-in config) to setUserConfigs', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs');
+    const { join } = await import('node:path');
+
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const p = join(dir, entry);
+        if (statSync(p).isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(p)) files.push(p);
+      }
+    };
+    walk('src');
+
+    const shipped = /(BUILTIN_CONFIGS|COOMEET_CONFIG|FLIRTIFY_CONFIG|DEMO_CONFIG)/;
+    const userConfigCall = /setUserConfigs\s*\(([\s\S]{0,200}?)\)/g;
+    const offenders: string[] = [];
+
+    for (const f of files) {
+      const src = readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+      for (const line of src.split('\n')) {
+        if (/^\s*(\/\/|\*)/.test(line)) continue;
+        userConfigCall.lastIndex = 0;
+        const m = userConfigCall.exec(line);
+        if (m && shipped.test(m[1]!)) offenders.push(`${f}: ${line.trim()}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('the content script registers shipped configs as built-ins', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync('src/content/index.ts', 'utf8');
+    expect(src).toMatch(/registerBuiltinConfigs\(\s*BUILTIN_CONFIGS\s*\)/);
+    expect(src).not.toMatch(/setUserConfigs\(\s*BUILTIN_CONFIGS\s*\)/);
   });
 });

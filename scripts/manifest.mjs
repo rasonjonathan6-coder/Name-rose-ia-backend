@@ -70,7 +70,17 @@ export function buildManifest({ prod = false } = {}) {
         matches: PLATFORM_MATCHES,
         js: ['content.js'],
         run_at: 'document_idle',
-        all_frames: false,
+        // Some platforms host the chat in a child frame: CooMeet serves a shell
+        // on www.coomeet.com and mounts the chat on iframe.coomeet.com. With
+        // `all_frames: false` the script only ran in the shell, so the chat was
+        // invisible. Attaching to child frames too is what makes that platform
+        // reachable; the content script then decides per frame whether it is the
+        // UI owner or just a pipeline runner (see src/content/frame-role.ts), so
+        // this does not produce one overlay per frame.
+        //
+        // `match_about_blank` stays false: an about:blank frame has no chat.
+        all_frames: true,
+        match_about_blank: false,
       },
     ],
     web_accessible_resources: [

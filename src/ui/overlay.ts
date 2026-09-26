@@ -521,8 +521,11 @@ export class RoseOverlay {
       disabled: !hasSuggestion,
     });
     add('Copy', 'Copy to clipboard', () => this.callbacks.onAction('copy'), { disabled: !hasSuggestion });
+    // Not gated on mode: manual means ROSE must not insert *by itself*, but an
+    // explicit Insert click is the operator asking for it. The state machine
+    // already allows it (only `inserted` branches on the mode).
     add('Insert', 'Put the reply in the message field', () => this.callbacks.onAction('insert'), {
-      disabled: !hasSuggestion || s.mode === 'manual',
+      disabled: !hasSuggestion,
     });
     add('Send', 'Insert and send now', () => this.callbacks.onAction('send'), {
       disabled: !hasSuggestion || !s.canSend,

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture G — chat frame</title>
+<link rel="stylesheet" href="/common.css" />
+<style>
+  .log { height: 60vh; overflow-y: auto; }
+</style>
+</head>
+<body>
+<!--
+  The chat itself, served from a different origin than the shell that embeds it
+  (see g-iframe-shell.html). This is the document ROSE has to reach: detection,
+  message reading and text insertion all happen here.
+-->
+<div class="page">
+  <header>
+    <span class="who" id="partner-name">Anna</span>
+    <span class="tag">fixture G · chat frame</span>
+    <span class="note">cross-origin child of the shell</span>
+  </header>
+
+  <div class="log" id="log" role="log" aria-live="polite" data-partner-id="anna-g1">
+    <div class="msg in" data-message-id="g-1">Hey! Are you around?<span class="meta">10:02</span></div>
+  </div>
+
+  <div class="composer">
+    <textarea id="composer" placeholder="Type a message…" aria-label="Message"></textarea>
+    <button class="send" id="send-btn" aria-label="Send message">Send</button>
+  </div>
+</div>
+
+<script>
+  const log = document.getElementById('log');
+  const composer = document.getElementById('composer');
+  const send = document.getElementById('send-btn');
+  let n = 1;
+
+  function append(dir, text) {
+    const el = document.createElement('div');
+    el.className = `msg ${dir}`;
+    el.dataset.messageId = `g-${++n}`;
+    el.textContent = text;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    el.appendChild(meta);
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return el;
+  }
+
+  send.addEventListener('click', () => {
+    const text = composer.value.trim();
+    if (!text) return;
+    append('out', text);
+    composer.value = '';
+  });
+
+  window.__fixture = {
+    receive: (text) => append('in', text),
+    sent: () => Array.from(log.querySelectorAll('.msg.out')).map((e) => e.childNodes[0].textContent),
+    incoming: () => Array.from(log.querySelectorAll('.msg.in')).map((e) => e.childNodes[0].textContent),
+    composerValue: () => composer.value,
+  };
+</script>
+</body>
+</html>

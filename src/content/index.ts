@@ -19,13 +19,22 @@ import type {
   Command,
   ConversationRef,
   DetectionReport,
+  OverlayIntent,
   QualityIssue,
   RoseSettings,
   Suggestion,
 } from '@/shared/types';
 import { PlatformDetector } from '@/platforms/detector';
 import type { PlatformAdapter } from '@/platforms/types';
+import { documentUrl } from '@/platforms/types';
 import { BUILTIN_CONFIGS } from '@/platforms/generic/config';
+import {
+  decideFrameRole,
+  shouldMountOverlay,
+  shouldRunPipeline,
+  frameKey,
+  type FrameRole,
+} from '@/content/frame-role';
 import { MessageDetector } from '@/core/conversation/message-detector';
 import { AutomationStateMachine } from '@/core/automation/state-machine';
 import { ResponseQualityGuard } from '@/core/safety/quality-guard';
@@ -35,6 +44,9 @@ import { ConversationEngine } from '@/core/conversation/engine';
 import { detectLanguage } from '@/core/translation/language';
 import { configureLogging, log, getLogEntries, onLog } from '@/core/logging/logger';
 import { RoseOverlay } from '@/ui/overlay';
+import type { OverlayState } from '@/ui/overlay';
+import type { OverlaySurface } from '@/ui/surface';
+import { RemoteOverlay, dispatchOverlayIntent, onOverlayIntent } from '@/ui/remote-overlay';
 import { rpc } from '@/shared/rpc';
 import { estimateTokens, normaliseText, sleep, truncate } from '@/shared/utils';
 import * as storage from '@/storage';
@@ -45,7 +57,13 @@ class RoseController {
   private detector = new PlatformDetector();
   private adapter: PlatformAdapter | null = null;
   private messageDetector: MessageDetector | null = null;
-  private overlay: RoseOverlay | null = null;
+  private overlay: OverlaySurface | null = null;
+  /** Set when this frame draws a panel whose data belongs to another frame. */
+  private mirrorFor: number | null = null;
+  /** Set when this frame owns the chat data but forwards panel updates. */
+  private remoteOverlay: RemoteOverlay | null = null;
+  /** Whether the arbiter has allowed this frame to draw the panel. */
+  private rendersPanel = false;
   private live: LiveCallAssistant | null = null;
   private machine = new AutomationStateMachine({ mode: 'manual' });
   private guard = new ResponseQualityGuard();
@@ -69,32 +87,212 @@ class RoseController {
   private statsSnapshot = { tokens: 0, requests: 0, costUsd: 0 };
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private spaTimer: ReturnType<typeof setInterval> | null = null;
+  /** What this frame is allowed to do (see content/frame-role). */
+  private role: FrameRole = 'top';
+  private readonly tabId: number | null = currentTabId();
+  private readonly frameId: number = currentFrameId();
 
   async init(): Promise<void> {
     this.settings = await storage.loadSettings();
     configureLogging({ enabled: this.settings.debug.enabled, verbose: this.settings.debug.verbose });
 
-    this.detector.setUserConfigs(BUILTIN_CONFIGS);
+    this.detector.registerBuiltinConfigs(BUILTIN_CONFIGS);
     this.report = this.detector.detect(document);
     this.adapter = this.detector.resolve(document);
+
+    // Decide what this frame is allowed to do before anything is mounted. The
+    // chat on some platforms (CooMeet) lives in a child frame, so the script now
+    // runs in child frames too — this is what stops a second overlay appearing
+    // inside one, and what stops ROSE attaching to ad/consent frames.
+    this.role = decideFrameRole({
+      isTopFrame: isTopFrame(),
+      platformClaimsHost: this.detector.claimsHost(documentUrl(document)),
+      chatDetected: !!this.report.resolved.input || !!this.report.resolved.container,
+    });
 
     log.info('content', `ROSE initialised on ${this.report.hostname}`, {
       platform: this.report.platform,
       confidence: this.report.confidence,
+      role: this.role,
+      isTopFrame: isTopFrame(),
     });
 
-    // Report detection, but never let a failure block the overlay.
-    void rpc(MSG.DETECTION_REPORT, { report: this.report }).catch(() => undefined);
+    // Report detection, but never let a failure block the overlay. The response
+    // also carries this frame's panel verdict, because the push notification can
+    // be lost if this frame's listener did not exist yet.
+    //
+    // That is exactly why the command listener is wired *before* this call:
+    // reporting is what makes the arbiter elect a renderer, and the election
+    // pushes `mount-overlay` straight back to this frame. Registering the
+    // listener afterwards drops that push (observed as "could not reach frame
+    // <tabId>:0") and leaves the panel dependent on the verdict fallback alone.
+    const relevant = shouldRunPipeline(this.role);
+    if (relevant) {
+      this.machine = new AutomationStateMachine({ mode: this.settings.automation.mode });
+      this.machine.applyConfig(this.settings.automation);
+      this.listenForCommands();
+    }
 
-    this.machine = new AutomationStateMachine({ mode: this.settings.automation.mode });
-    this.machine.applyConfig(this.settings.automation);
+    const verdict = await rpc(MSG.DETECTION_REPORT, {
+      report: this.report,
+      role: this.role,
+      frame: this.frameIdentity(),
+    }).catch(() => null);
 
-    this.mountOverlay();
-    this.startDetection();
-    this.watchSpaNavigation();
-    this.listenForCommands();
+    if (!relevant) {
+      log.info('content', 'frame not relevant to ROSE; standing down', { role: this.role });
+      return;
+    }
 
-    this.overlay?.toast(`ROSE active — ${this.report.platform} (${Math.round(this.report.confidence * 100)}% confidence)`, 'success');
+    // A frame that only mirrors another frame's panel must not run its own
+    // pipeline: on the CooMeet shape the shell frame has no chat, and letting its
+    // empty pipeline publish would overwrite the real state arriving from the
+    // chat frame.
+    const pureMirror = !!verdict?.ok && !!verdict.data?.render && verdict.data.mirrorFor !== null;
+
+    // The panel surface is created before detection starts. Detection can fire a
+    // message callback on the very first scan, and the state it publishes has to
+    // land somewhere; creating the surface afterwards would drop that first
+    // message and leave the panel blank until the next one.
+    if (verdict?.ok && verdict.data) {
+      this.applyPanelVerdict(verdict.data);
+    } else if (shouldMountOverlay(this.role)) {
+      // No arbitration available (an older background, or the report failed):
+      // fall back to the pre-existing single-frame behaviour so ROSE still works
+      // rather than silently showing nothing.
+      this.rendersPanel = true;
+      this.mountOverlay();
+      this.announceActive();
+    }
+
+    if (!pureMirror) {
+      this.startDetection();
+      this.watchSpaNavigation();
+      this.watchFrameTeardown();
+      // The chat frame may receive panel actions from the frame that draws the
+      // panel, so the intent handler is always wired, not only in publishing mode.
+      onOverlayIntent((intent) => this.handleOverlayIntent(intent));
+    }
+  }
+
+  /**
+   * Acts on the arbiter's verdict for this frame.
+   *
+   * Four cases, and only these:
+   *   render + no mirror      — this frame draws its own chat's panel (the usual
+   *                             single-frame site).
+   *   render + mirror N       — this frame draws frame N's chat (the CooMeet
+   *                             shape: the panel must be in the top frame because
+   *                             a `position: fixed` panel inside an iframe is
+   *                             clipped to that iframe).
+   *   no render + owns data   — this frame has the chat but another frame draws,
+   *                             so it publishes its panel state instead.
+   *   neither                 — nothing to do.
+   */
+  private applyPanelVerdict(verdict: { render: boolean; mirrorFor: number | null; dataOwner: boolean }): void {
+    if (!verdict.render) {
+      if (verdict.dataOwner) this.startPublishingPanelState();
+      return;
+    }
+
+    this.rendersPanel = true;
+    if (verdict.mirrorFor === null) {
+      this.mirrorFor = null;
+      if (!this.overlay) this.mountOverlay();
+      this.announceActive();
+      return;
+    }
+
+    // Mirroring: this frame has no chat of its own, so the panel is a remote
+    // view. Telling the background we are ready makes it send the current
+    // snapshot and ask the source frame to republish.
+    this.mirrorFor = verdict.mirrorFor;
+    if (!this.overlay) this.mountOverlay();
+    this.overlay?.update({ platformLabel: this.adapter?.label ?? 'Generic chat' });
+    void rpc(MSG.OVERLAY_MIRROR_READY, {}).catch(() => undefined);
+  }
+
+  /**
+   * Tells the operator ROSE is attached and how confident the detection was.
+   *
+   * Split out because the same message is shown both when the arbiter verdict
+   * arrives and on the fallback path where no arbitration happened.
+   */
+  private announceActive(): void {
+    if (!this.report) return;
+    this.overlay?.toast(
+      `ROSE active — ${this.report.platform} (${Math.round(this.report.confidence * 100)}% confidence)`,
+      'success',
+    );
+  }
+
+  /**
+   * Switches this frame to publishing mode: it owns the chat data but another
+   * frame draws the panel, so every panel update is forwarded instead of drawn.
+   *
+   * A `RemoteOverlay` is used as the surface, so all the existing
+   * `this.overlay.update(...)` call sites keep working unchanged.
+   */
+  private startPublishingPanelState(): void {
+    if (this.remoteOverlay) return;
+    this.remoteOverlay = new RemoteOverlay();
+    this.overlay = this.remoteOverlay;
+    this.remoteOverlay.mount();
+  }
+
+  /** Applies a state snapshot published by the frame that owns the chat data. */
+  private applyMirrorState(fromFrameId: number, state: Record<string, unknown>, mounted: boolean): void {
+    if (this.mirrorFor !== fromFrameId) {
+      log.debug('content', 'mirror state ignored (not my source)', {
+        fromFrameId,
+        mirrorFor: this.mirrorFor,
+      });
+      return;
+    }
+    if (!mounted) {
+      this.destroyOverlay();
+      return;
+    }
+    // `toast` is a one-shot side channel rather than panel state, so it is pulled
+    // out and played once instead of being merged into the persistent state.
+    const { toast, ...rest } = state as Partial<OverlayState> & {
+      toast?: { message: string; kind?: 'info' | 'error' | 'success'; ms?: number };
+    };
+    log.debug('content', 'mirror state applied', {
+      hasOverlay: !!this.overlay,
+      conversationName: rest.conversationName,
+      incoming: rest.incoming,
+      suggestionCount: rest.suggestions?.length ?? 0,
+    });
+    this.overlay?.update(rest);
+    if (toast?.message) this.overlay?.toast(toast.message, toast.kind ?? 'info', toast.ms);
+  }
+
+  /** Stable identity for this frame, from the extension's own metadata. */
+  private frameIdentity(): { tabId: number | null; frameId: number; url: string; key: string } {
+    const url = documentUrl(document).href;
+    return {
+      tabId: this.tabId,
+      frameId: this.frameId,
+      url,
+      key: frameKey(this.tabId, this.frameId, url),
+    };
+  }
+
+  /**
+   * Whether this frame holds an actual chat surface.
+   *
+   * Recomputed rather than cached: a SPA can mount the composer after the initial
+   * detection, and this gates command handling (an insert must not land in an
+   * unrelated field on a frame that only carries the platform shell).
+   */
+  private hasChatSurface(): boolean {
+    if (!this.adapter) return false;
+    try {
+      return !!this.adapter.getInput(document) || !!this.adapter.getMessageContainer(document);
+    } catch {
+      return false;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -103,21 +301,29 @@ class RoseController {
 
   private mountOverlay(): void {
     const s = this.settings!;
+    // When the chat lives in a child frame, the panel is drawn here but the data
+    // belongs elsewhere. Every callback then forwards an intent over RPC instead
+    // of acting on a chat this frame does not have.
+    const mirroring = this.mirrorFor !== null;
+    const forward = (intent: OverlayIntent): void => {
+      void rpc(MSG.OVERLAY_INTENT, { intent });
+    };
     try {
       this.overlay = new RoseOverlay(
         {
-          onGenerate: () => void this.generate(),
-          onRegenerate: () => void this.generate(true),
-          onSelect: (sug) => this.select(sug),
-          onAction: (a) => void this.action(a),
-          onModeChange: (m) => void this.setMode(m),
-          onStop: () => this.stopAll(),
-          onPauseToggle: () => void this.togglePause(),
+          onGenerate: () => (mirroring ? forward({ action: 'generate', force: false }) : void this.generate()),
+          onRegenerate: () => (mirroring ? forward({ action: 'generate', force: true }) : void this.generate(true)),
+          onSelect: (sug) =>
+            mirroring ? forward({ action: 'select', index: this.suggestions.indexOf(sug) }) : this.select(sug),
+          onAction: (a) => (mirroring ? forward({ action: 'action', kind: a }) : void this.action(a)),
+          onModeChange: (m) => (mirroring ? forward({ action: 'set-mode', mode: m }) : void this.setMode(m)),
+          onStop: () => (mirroring ? forward({ action: 'stop-all' }) : this.stopAll()),
+          onPauseToggle: () => (mirroring ? forward({ action: 'pause-toggle' }) : void this.togglePause()),
           onCollapse: () => this.toggleCollapse(),
           onClose: () => this.destroyOverlay(),
           onOpenOptions: () => this.openOptions(),
           onOpenDashboard: () => this.openDashboard(),
-          onLiveToggle: () => void this.toggleLive(),
+          onLiveToggle: () => (mirroring ? forward({ action: 'live-toggle' }) : void this.toggleLive()),
         },
         {
           mode: s.automation.mode,
@@ -128,6 +334,8 @@ class RoseController {
           accent: s.appearance.accent,
           platformLabel: this.adapter?.label ?? 'Generic chat',
           debugVisible: s.debug.showOverlay,
+          // A mirror starts blank; the source frame fills it in.
+          conversationName: mirroring ? 'Connecting…' : 'Unknown',
         },
       );
       this.overlay.mount();
@@ -199,6 +407,11 @@ class RoseController {
         onConversationChange: () => this.onConversationChanged(),
       });
       this.messageDetector.start(document);
+      // The detector primes existing history without emitting it as "new", so
+      // nothing has published the conversation identity yet. Without this the
+      // panel shows its placeholder name until the client's *next* message,
+      // even though the conversation is already on screen.
+      this.onConversationChanged();
     } catch (err) {
       log.error('content', 'detector failed to start', err);
     }
@@ -337,6 +550,24 @@ class RoseController {
     }
   }
 
+  /**
+   * Tells the background when this frame goes away.
+   *
+   * The overlay arbiter needs this: a chat frame that navigates away would
+   * otherwise keep owning the UI, leaving the tab with no visible overlay at all.
+   * `pagehide` fires on navigation and on frame removal, and unlike
+   * `chrome.webNavigation` it needs no extra permission.
+   */
+  private watchFrameTeardown(): void {
+    const announce = () => {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      void rpc(MSG.FRAME_GONE, {} as never).catch(() => undefined);
+    };
+    window.addEventListener('pagehide', announce, { once: true });
+    window.addEventListener('unload', announce, { once: true });
+  }
+
   private async translateIncoming(text: string, target: string): Promise<void> {
     const res = await rpc(MSG.REQUEST_TRANSLATION, { text, targetLanguage: target, tone: 'neutral' });
     if (res.ok && res.data?.text) {
@@ -389,17 +620,21 @@ class RoseController {
     this.selectedIndex = 0;
     this.machine.dispatch({ type: 'generation-succeeded', conversationId: this.conversation.id });
 
+    // Sync first, then publish the suggestions: every action button is disabled
+    // while `busy` is true, so writing the suggestions before clearing `busy`
+    // leaves the panel showing replies whose Insert/Copy are greyed out — the
+    // operator sees the result but cannot act on it until the next update.
+    this.syncOverlay(
+      res.data?.result.cached
+        ? 'cached reply (no tokens spent)'
+        : `${res.data?.result.model ?? 'model'} · ${res.data?.result.latencyMs ?? 0}ms`,
+    );
     this.overlay?.update({
       suggestions: this.suggestions,
       suggestionIssues: this.suggestionIssues,
       selectedIndex: 0,
       error: null,
     });
-    this.syncOverlay(
-      res.data?.result.cached
-        ? 'cached reply (no tokens spent)'
-        : `${res.data?.result.model ?? 'model'} · ${res.data?.result.latencyMs ?? 0}ms`,
-    );
     await this.refreshStats();
 
     // Assisted mode: insert automatically once suggestions exist.
@@ -518,6 +753,39 @@ class RoseController {
       await this.generate(true);
     } finally {
       this.settings = { ...this.settings, conversation: { ...this.settings.conversation, length: original } };
+    }
+  }
+
+  /**
+   * Handles an operator action forwarded from the frame that draws the panel.
+   *
+   * Only relevant when this frame owns the chat but does not draw: the panel is
+   * in another frame, so its buttons arrive here as intents rather than as direct
+   * calls.
+   */
+  private handleOverlayIntent(intent: OverlayIntent): void {
+    switch (intent.action) {
+      case 'generate':
+        void this.generate(intent.force);
+        break;
+      case 'select':
+        if (this.suggestions[intent.index]) this.select(this.suggestions[intent.index]!);
+        break;
+      case 'action':
+        void this.action(intent.kind);
+        break;
+      case 'set-mode':
+        void this.setMode(intent.mode);
+        break;
+      case 'stop-all':
+        this.stopAll();
+        break;
+      case 'pause-toggle':
+        void this.togglePause();
+        break;
+      case 'live-toggle':
+        void this.toggleLive();
+        break;
     }
   }
 
@@ -806,6 +1074,16 @@ class RoseController {
       if (env?.type !== MSG.COMMAND || !env.payload) return false;
 
       const cmd = env.payload;
+      // A tab can hold several frames that run the pipeline (the CooMeet shell
+      // plus its chat frame). Only the frame that actually resolved a composer
+      // may act on an insertion, otherwise a broadcast could write into an
+      // unrelated field on the shell page.
+      if (cmd.action === 'insert' && !this.hasChatSurface()) {
+        log.debug('content', 'ignoring insert: no chat surface in this frame');
+        sendResponse({ ok: true, ignored: 'no-chat-surface' });
+        return false;
+      }
+
       void (async () => {
         try {
           switch (cmd.action) {
@@ -834,6 +1112,32 @@ class RoseController {
             case 'toggle-overlay':
               if (this.overlay) this.toggleCollapse();
               else this.mountOverlay();
+              break;
+            case 'mount-overlay':
+              // Arbitrated by the background: this frame draws the panel, either
+              // for its own chat or as a mirror of another frame's.
+              this.applyPanelVerdict({ render: true, mirrorFor: cmd.mirrorFor, dataOwner: false });
+              break;
+            case 'unmount-overlay':
+              // Another frame took over the panel; remove ours so the operator
+              // never sees two.
+              this.rendersPanel = false;
+              this.mirrorFor = null;
+              if (this.overlay) this.destroyOverlay();
+              break;
+            case 'mirror-state':
+              log.debug('content', 'mirror state received', {
+                fromFrameId: cmd.fromFrameId,
+                mirrorFor: this.mirrorFor,
+                mounted: cmd.mounted,
+              });
+              this.applyMirrorState(cmd.fromFrameId, cmd.state, cmd.mounted);
+              break;
+            case 'republish-overlay':
+              this.remoteOverlay?.republish();
+              break;
+            case 'overlay-intent':
+              dispatchOverlayIntent(cmd.intent);
               break;
             case 'open-conversation':
               this.overlay?.update({ collapsed: false });
@@ -934,10 +1238,45 @@ class RoseController {
 // Bootstrap
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether this document is the top-level frame.
+ *
+ * `window.top` access throws in a cross-origin frame, so it is wrapped: a throw
+ * is itself proof that we are not the top frame.
+ */
+function isTopFrame(): boolean {
+  try {
+    return window.top === window;
+  } catch {
+    return false;
+  }
+}
+
+/** Frame id from the extension's own metadata (0 = top frame). */
+function currentFrameId(): number {
+  const g = globalThis as unknown as { chrome?: { runtime?: { getFrameId?: () => number } } };
+  try {
+    return g.chrome?.runtime?.getFrameId?.() ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The tab id is not exposed to a content script, so it is resolved once over
+ * RPC. Until it arrives, `frameKey` uses a stable placeholder — the key is only
+ * ever used for identity/logging, never for authorization.
+ */
+function currentTabId(): number | null {
+  return null;
+}
+
 let controller: RoseController | null = null;
 
 async function boot(): Promise<void> {
   // Guard against double injection (reloads, SPA re-runs, manual re-injection).
+  // The guard is per-document, so each frame gets its own controller — which is
+  // required now that ROSE attaches to child frames.
   if ((globalThis as unknown as { __roseBooted?: boolean }).__roseBooted) {
     log.info('content', 'already booted; skipping duplicate injection');
     return;

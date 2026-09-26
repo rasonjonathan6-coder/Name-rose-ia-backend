@@ -173,6 +173,42 @@ itself, so a bare run fails at "demo page loads".
 - Raise the CDP timeout for these runs — a real model can take tens of seconds
   (`scripts/cdp.mjs` uses 180s).
 
+## Cross-origin iframe validation (`scripts/validation/phase6-iframe.mjs`)
+
+Reproduces the CooMeet shape: a shell page on `127.0.0.1:8788` with **no chat of
+its own** embedding the conversation in a child frame on `127.0.0.1:8789`, so the
+frame is genuinely cross-origin. The shell carries a decoy search field, so a fix
+that "writes into the first text field of the top frame" is caught rather than
+passing by accident.
+
+Four defects this harness surfaced, all now fixed — keep them in mind when
+touching the overlay bridge:
+
+- **The command listener must exist before `DETECTION_REPORT`.** Reporting is what
+  makes the arbiter elect a renderer, and the election pushes `mount-overlay`
+  straight back. Wiring `listenForCommands()` after the report drops that push
+  (seen as `could not reach frame <tabId>:0`).
+- **The initial conversation identity was never published.** `MessageDetector.start`
+  primes existing history *without* emitting it, so nothing told the panel who the
+  client was until their next message. `startDetection` now calls
+  `onConversationChanged()` after `start`.
+- **Suggestions were published while the machine was still busy.** Every action
+  button is disabled while `busy`, so the panel showed replies whose Insert/Copy
+  were greyed out. Publish after `syncOverlay` clears the busy state.
+- **`Insert` was disabled in manual mode.** Manual means ROSE must not insert *by
+  itself*; an explicit click is the operator asking. The state machine already
+  allowed it.
+
+Two harness rules, both learned the hard way:
+
+- **Wait, don't read once.** The panel mounts before the first mirror snapshot
+  arrives, so a single read races the bridge and fails spuriously.
+- **Wait for the panel to leave `busy` before clicking an action.** Otherwise the
+  click lands on a disabled button and proves nothing.
+
+The mirror is keyed `tabId:frameId` in the background; the renderer only accepts a
+snapshot whose `fromFrameId` matches the `mirrorFor` it was told to mirror.
+
 ## Honesty requirement
 
 The user explicitly requires that features not be claimed as working unless
@@ -186,3 +222,7 @@ Live validation did verify the generic path end to end on `web.libera.chat`
 read back). CooMeet and Flirtify could not be verified because their chat
 requires an authenticated video session; their public pages are marketing pages
 with no chat DOM, and ROSE now correctly reports "no conversation" there.
+
+What *is* verified for the CooMeet shape is the structural problem it presents —
+a chatless shell embedding a cross-origin chat frame — via Phase 6. That covers
+the overlay bridge and cross-frame insertion, not CooMeet's own selectors.

@@ -3,8 +3,11 @@ import type {
   ConversationRef,
   DetectionReport,
   Envelope,
+  FrameIdentity,
+  FrameRoleName,
   GenerationResult,
   MessageResponse,
+  OverlayIntent,
   PlatformId,
   ResponseLength,
   ResponseStyle,
@@ -67,11 +70,18 @@ export interface RecordOutgoingRequest {
 
 export interface ReportDetectionRequest {
   report: DetectionReport;
+  /** Which frame produced this report (top frame vs chat frame). */
+  role?: FrameRoleName;
+  /** Frame identity, so the background can attribute the report. */
+  frame?: FrameIdentity;
 }
 
 export interface RpcMap {
   [MSG.PING]: { req: void; res: { ok: true; version: string } };
-  [MSG.DETECTION_REPORT]: { req: ReportDetectionRequest; res: { accepted: boolean } };
+  [MSG.DETECTION_REPORT]: {
+    req: ReportDetectionRequest;
+    res: { accepted: boolean; render: boolean; mirrorFor: number | null; dataOwner: boolean };
+  };
   [MSG.MESSAGE_DETECTED]: {
     req: { conversation: ConversationRef; text: string; language: string | null };
     res: { memory: MemorySummary; shouldCallAI: boolean; reason: string };
@@ -81,7 +91,14 @@ export interface RpcMap {
   [MSG.REQUEST_TRANSLATION]: { req: TranslateRequest; res: { text: string | null } };
   [MSG.STATS_EVENT]: { req: StatsEvent; res: { ok: true } };
   [MSG.CONVERSATION_ACTIVATED]: { req: { conversation: ConversationRef }; res: { memory: MemorySummary | null } };
-  [MSG.ENABLE_SITE]: { req: { host: string }; res: { host: string; origin: string } };
+  [MSG.ACTIVATE_SITE]: { req: { host: string }; res: { host: string; origin: string } };
+  [MSG.FRAME_GONE]: { req: Record<string, never>; res: { accepted: boolean } };
+  [MSG.OVERLAY_SYNC]: {
+    req: { state: Record<string, unknown>; mounted: boolean };
+    res: { delivered: boolean };
+  };
+  [MSG.OVERLAY_INTENT]: { req: { intent: OverlayIntent }; res: { delivered: boolean } };
+  [MSG.OVERLAY_MIRROR_READY]: { req: Record<string, never>; res: { mirrored: boolean } };
 }
 
 /**

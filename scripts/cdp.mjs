@@ -38,13 +38,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * own world is `default`, the extension content script's is `isolated`. Prefer
  * the newest match, and fall back to the newest context at all so a target that
  * reports no auxData still works.
+ *
+ * `topFrameId` matters as soon as a page has iframes: a child frame announces
+ * its own `isDefault` context *after* the parent's, so "newest default" is the
+ * iframe and every page-level assertion would silently run inside the frame.
+ * When the id is known, only contexts belonging to the top frame qualify.
  */
-function pickContext(contexts, kind) {
+function pickContext(contexts, kind, topFrameId) {
   if (!contexts.length) return undefined;
   const matches = contexts.filter((c) =>
     kind === 'isolated' ? c.auxData?.type === 'isolated' : c.auxData?.isDefault === true,
   );
-  const pool = matches.length ? matches : kind === 'default' ? contexts : [];
+  const inTop = topFrameId === undefined ? matches : matches.filter((c) => c.auxData?.frameId === topFrameId);
+  const pool = inTop.length ? inTop : matches.length ? matches : kind === 'default' ? contexts : [];
   return pool.length ? pool[pool.length - 1].id : undefined;
 }
 
@@ -326,15 +332,35 @@ export class Browser {
        * exist. Filtering on `isDefault` keeps page assertions in the page.
        */
       get contextId() {
-        return pickContext(contexts, 'default');
+        return pickContext(contexts, 'default', targetInfo.targetId);
       },
       /** The content script's isolated world, where `window.ROSE_IA` lives. */
       get isolatedContextId() {
-        return pickContext(contexts, 'isolated');
+        return pickContext(contexts, 'isolated', targetInfo.targetId);
       },
       /** 'accept' (default) or 'dismiss' — how native dialogs are answered. */
       setDialogPolicy: (p) => {
         dialogPolicy = p;
+      },
+      /**
+       * Execution contexts belonging to child frames, newest first.
+       *
+       * Needed to verify cross-origin behaviour: the whole point of the CooMeet
+       * shape is that the chat lives in a different origin, so assertions about
+       * what ROSE did inside that frame have to run in *that* frame's context.
+       * A cross-origin child frame's context is not reachable from the parent
+       * page, but CDP sees every frame in the target.
+       */
+      childContexts() {
+        return contexts
+          .filter((c) => c.auxData?.isDefault === true && c.auxData?.frameId && c.auxData.frameId !== targetInfo.targetId)
+          .slice()
+          .reverse();
+      },
+      /** The default context of the newest child frame whose URL matches `re`. */
+      frameContext(re) {
+        const match = this.childContexts().find((c) => re.test(c.origin ?? c.name ?? ''));
+        return match?.id;
       },
       detach: () => {
         offCreated();
@@ -377,8 +403,8 @@ export class Browser {
   }
 
   /** Evaluates an expression in a page and returns its JSON value. */
-  async eval(session, expression, { awaitPromise = true, _attempt = 0, world = 'default' } = {}) {
-    const contextId = world === 'isolated' ? session.isolatedContextId : session.contextId;
+  async eval(session, expression, { awaitPromise = true, _attempt = 0, world = 'default', contextId: explicit } = {}) {
+    const contextId = explicit ?? (world === 'isolated' ? session.isolatedContextId : session.contextId);
     let res;
     try {
       res = await session.send('Runtime.evaluate', {

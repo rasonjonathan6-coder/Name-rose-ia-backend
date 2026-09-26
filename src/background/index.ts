@@ -14,16 +14,18 @@
 import { MSG } from '@/shared/types';
 import type {
   AIProviderConfig,
+  Command,
   ConversationRef,
   Envelope,
   GenerationRequest,
   MessageResponse,
+  OverlayIntent,
   RoseSettings,
   StatsEvent,
   Suggestion,
 } from '@/shared/types';
 import { rpc, toMemorySummary } from '@/shared/rpc';
-import { configureLogging, log } from '@/core/logging/logger';
+import { configureLogging, getLogEntries, log } from '@/core/logging/logger';
 import { ClientMemoryStore } from '@/core/memory/store';
 import { ConversationEngine, resolveLanguage } from '@/core/conversation/engine';
 import { GenerationService } from '@/core/ai/generation-service';
@@ -36,7 +38,8 @@ import { buildSummaryPrompt } from '@/core/ai/prompts';
 import { normaliseText } from '@/shared/utils';
 import * as storage from '@/storage';
 import { NotificationGate } from './notifications';
-import { enableSite } from './site-access';
+import { activateSite } from './site-access';
+import { FrameArbiter, type ArbiterDecision } from './frame-arbiter';
 
 const VERSION = '0.1.0';
 
@@ -123,11 +126,18 @@ function getNotifications(): NotificationGate {
 const g = globalThis as unknown as { chrome?: typeof chrome };
 
 if (g.chrome?.runtime?.onMessage) {
-  g.chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+  g.chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     const envelope = message as Envelope;
     if (!envelope?.type) return false;
 
-    handle(envelope)
+    // The frame id comes from the browser's own sender metadata, never from the
+    // page: a page cannot claim to be another frame. `undefined` means the
+    // message did not come from a content script.
+    const frameId = sender?.frameId;
+    const tabId = sender?.tab?.id;
+    const fromContentScript = typeof frameId === 'number' && typeof tabId === 'number';
+
+    handle(envelope, fromContentScript ? { tabId: tabId!, frameId } : null)
       .then((res) => sendResponse(res))
       .catch((err) => {
         const text = err instanceof Error ? err.message : String(err);
@@ -139,7 +149,49 @@ if (g.chrome?.runtime?.onMessage) {
   });
 }
 
-async function handle(env: Envelope): Promise<MessageResponse<unknown>> {
+/** Where a message came from, as reported by the browser rather than the page. */
+interface SenderOrigin {
+  tabId: number;
+  frameId: number;
+}
+
+/**
+ * Overlay arbitration. One arbiter for the whole service worker: it is the only
+ * place that knows about every frame of every tab, which is exactly what is
+ * needed to keep a single overlay per tab.
+ */
+const arbiter = new FrameArbiter();
+
+/**
+ * Latest panel state published by each data-owning frame, keyed `tabId:frameId`.
+ *
+ * Needed because a frame can publish before the renderer exists (the chat frame
+ * often wins the race), and because the renderer asks for a snapshot when it
+ * mounts. Without it the panel would stay blank until the next state change.
+ */
+const mirrorState = new Map<string, Record<string, unknown>>();
+
+/** Sends a command to one specific frame of a tab. */
+async function sendToFrame(tabId: number, frameId: number, command: Command): Promise<void> {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: MSG.COMMAND, payload: command }, { frameId });
+  } catch (err) {
+    // A frame can disappear between arbitration and delivery; that is normal.
+    log.debug('background', `could not reach frame ${tabId}:${frameId}`, err);
+  }
+}
+
+/** Applies an arbitration decision: the renderer mounts, the previous one does not. */
+async function applyDecision(tabId: number, decision: ArbiterDecision): Promise<void> {
+  for (const frameId of decision.unmountIn) {
+    await sendToFrame(tabId, frameId, { action: 'unmount-overlay' });
+  }
+  for (const { frameId, mirrorFor } of decision.mountIn) {
+    await sendToFrame(tabId, frameId, { action: 'mount-overlay', mirrorFor });
+  }
+}
+
+async function handle(env: Envelope, origin: SenderOrigin | null): Promise<MessageResponse<unknown>> {
   const settings = await getSettings();
 
   switch (env.type) {
@@ -147,20 +199,136 @@ async function handle(env: Envelope): Promise<MessageResponse<unknown>> {
       return { ok: true, data: { ok: true, version: VERSION } };
 
     case MSG.DETECTION_REPORT: {
-      const { report } = env.payload as { report: { platform: string; confidence: number; hostname: string } };
+      const { report, role, frame } = env.payload as {
+        report: { platform: string; confidence: number; hostname: string; resolved?: Record<string, string | null> };
+        role?: string;
+        frame?: { tabId: number | null; frameId: number; url: string; key: string };
+      };
+      // Prefer the browser's frame id over the page-reported one.
+      const frameId = origin?.frameId ?? frame?.frameId ?? 0;
+      const tabId = origin?.tabId ?? frame?.tabId ?? null;
       log.info('background', 'detection reported', {
         platform: report.platform,
         confidence: report.confidence,
         hostname: report.hostname,
+        role: role ?? 'unknown',
+        frame: tabId === null ? null : `${tabId}:${frameId}`,
       });
-      if (report.platform === 'generic' && report.confidence < 0.5) {
+
+      // Only the frame that owns the UI can raise an integration warning; a chat
+      // frame reporting generic at low confidence is expected and would otherwise
+      // produce duplicate notifications for one tab.
+      const ownsUi = !role || role === 'top';
+      if (ownsUi && report.platform === 'generic' && report.confidence < 0.5) {
         await getNotifications().notify(
           'integration',
           'Platform not fully recognised',
           `ROSE is running in generic mode on ${report.hostname}. Add a site configuration in Settings if detection misses your chat.`,
         );
       }
+
+      // Arbitrate which frame owns the overlay. The frame id must come from the
+      // browser, so a report without sender metadata is not arbitrated.
+      let instruction: { render: boolean; mirrorFor: number | null; dataOwner: boolean } = {
+        render: false,
+        mirrorFor: null,
+        dataOwner: false,
+      };
+      if (origin && (role === 'top' || role === 'chat' || role === 'ignored')) {
+        const decision = arbiter.report({
+          tabId: origin.tabId,
+          frameId: origin.frameId,
+          role,
+          // A frame has a chat surface when the detector resolved a composer or a
+          // message container in it — the same signal the content script used.
+          hasChat: !!report.resolved?.input || !!report.resolved?.container,
+        });
+        await applyDecision(origin.tabId, decision);
+        // The push above can arrive before this frame's listener exists (the chat
+        // frame normally reports first, so the top frame is elected while it is
+        // still loading). Returning the verdict lets each frame act on the
+        // decision that applies to it, whatever the ordering.
+        instruction = arbiter.instructionFor(origin.tabId, origin.frameId);
+      }
+
+      return { ok: true, data: { accepted: true, ...instruction } };
+    }
+
+    case MSG.FRAME_GONE: {
+      // A frame is being torn down. Drop it from arbitration so a chat frame that
+      // navigated away stops owning the overlay and the tab can elect a new owner.
+      if (!origin) return { ok: true, data: { accepted: false } };
+      const decision = arbiter.forgetFrame(origin.tabId, origin.frameId);
+      await applyDecision(origin.tabId, decision);
+      // Forget any mirrored state, so a re-created frame does not show stale data.
+      mirrorState.delete(`${origin.tabId}:${origin.frameId}`);
+      log.debug('background', 'frame gone', { frame: `${origin.tabId}:${origin.frameId}` });
       return { ok: true, data: { accepted: true } };
+    }
+
+    case MSG.OVERLAY_SYNC: {
+      // A data-owning frame published its panel state. Cache it and forward to
+      // the renderer, which is the only frame allowed to draw the panel.
+      if (!origin) return { ok: true, data: { delivered: false } };
+      const { state, mounted } = env.payload as { state: Record<string, unknown>; mounted: boolean };
+      const key = `${origin.tabId}:${origin.frameId}`;
+      if (mounted) mirrorState.set(key, state);
+      else mirrorState.delete(key);
+
+      const renderer = arbiter.renderer(origin.tabId);
+      log.debug('background', 'overlay sync received', {
+        from: `${origin.tabId}:${origin.frameId}`,
+        renderer,
+        mounted,
+        bytes: JSON.stringify(state).length,
+      });
+      // Only forward when the renderer is a different frame: if the top frame is
+      // both data owner and renderer it already has the state locally.
+      if (renderer === 'none' || renderer === origin.frameId) {
+        return { ok: true, data: { delivered: false } };
+      }
+      await sendToFrame(origin.tabId, renderer, {
+        action: 'mirror-state',
+        fromFrameId: origin.frameId,
+        state,
+        mounted,
+      } as Command);
+      log.debug('background', 'overlay sync forwarded', { to: `${origin.tabId}:${renderer}` });
+      return { ok: true, data: { delivered: true } };
+    }
+
+    case MSG.OVERLAY_MIRROR_READY: {
+      // The renderer just mounted and wants the current snapshot of its source.
+      if (!origin) return { ok: true, data: { mirrored: false } };
+      const dataOwner = arbiter.dataOwner(origin.tabId);
+      if (dataOwner === 'none' || dataOwner === origin.frameId) {
+        return { ok: true, data: { mirrored: false } };
+      }
+      const state = mirrorState.get(`${origin.tabId}:${dataOwner}`);
+      if (state) {
+        await sendToFrame(origin.tabId, origin.frameId, {
+          action: 'mirror-state',
+          fromFrameId: dataOwner,
+          state,
+          mounted: true,
+        } as Command);
+      }
+      // Ask the source to republish, which covers the case where it published
+      // before the renderer existed and its message was dropped.
+      await sendToFrame(origin.tabId, dataOwner, { action: 'republish-overlay' } as Command);
+      return { ok: true, data: { mirrored: true } };
+    }
+
+    case MSG.OVERLAY_INTENT: {
+      // The renderer forwarded an operator action; deliver it to the data owner.
+      if (!origin) return { ok: true, data: { delivered: false } };
+      const { intent } = env.payload as { intent: OverlayIntent };
+      const dataOwner = arbiter.dataOwner(origin.tabId);
+      if (dataOwner === 'none' || dataOwner === origin.frameId) {
+        return { ok: true, data: { delivered: false } };
+      }
+      await sendToFrame(origin.tabId, dataOwner, { action: 'overlay-intent', intent } as Command);
+      return { ok: true, data: { delivered: true } };
     }
 
     case MSG.CONVERSATION_ACTIVATED: {
@@ -249,12 +417,12 @@ async function handle(env: Envelope): Promise<MessageResponse<unknown>> {
       return { ok: true, data: { ok: true } };
     }
 
-    case MSG.ENABLE_SITE: {
+    case MSG.ACTIVATE_SITE: {
       const { host } = (env.payload ?? {}) as { host?: string };
       if (!g.chrome?.permissions || !g.chrome?.scripting) {
         return { ok: false, error: 'This browser does not expose the permissions API.' };
       }
-      return enableSite(g.chrome as never, host ?? '');
+      return activateSite(g.chrome as never, host ?? '');
     }
 
     default:
@@ -499,3 +667,24 @@ if (g.chrome?.runtime?.onMessage) {
 }
 
 log.info('background', `ROSE IA service worker ready (v${VERSION})`);
+
+/**
+ * Diagnostic handle for the validation harness.
+ *
+ * Lives only in the service worker — the page cannot reach it — and exposes the
+ * arbitration state, which is otherwise unobservable from outside: a mirror that
+ * never receives a snapshot looks identical to one that received the wrong
+ * snapshot, and both look like "the panel is blank".
+ */
+Object.defineProperty(globalThis, '__ROSE_BG', {
+  value: {
+    version: VERSION,
+    frames: (tabId: number) => arbiter.frames(tabId),
+    dataOwner: (tabId: number) => arbiter.dataOwner(tabId),
+    renderer: (tabId: number) => arbiter.renderer(tabId),
+    mirrorKeys: () => [...mirrorState.keys()],
+    mirrorState: (key: string) => mirrorState.get(key) ?? null,
+    logs: () => getLogEntries().map((e) => `${e.scope}: ${e.message}`),
+  },
+  configurable: true,
+});

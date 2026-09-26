@@ -12,16 +12,31 @@ export type { PlatformAdapter, SiteConfig } from './types';
 /**
  * PlatformDetector — resolves the best adapter for the current document.
  *
- * Order of resolution:
- *   1. user-supplied site configs (highest priority, they know their site)
- *   2. built-in adapters that match the hostname
- *   3. the generic heuristic adapter as a universal fallback
+ * Three tiers, in descending priority:
+ *
+ *   1. built-in adapters (CooMeet, Flirtify, demo) — these are the shipped,
+ *      platform-specific implementations and are the *correct* winner on their
+ *      own hosts;
+ *   2. built-in heuristic configs registered via `registerBuiltinConfigs` —
+ *      selector hints for hosts ROSE ships knowledge about but no dedicated
+ *      adapter for;
+ *   3. user-supplied configs registered via `setUserConfigs` — explicit,
+ *      operator-authored configurations, which win outright because the operator
+ *      knows their site better than the heuristics do.
+ *
+ * `setUserConfigs` must only ever receive *user* configurations. Passing the
+ * shipped `BUILTIN_CONFIGS` through it was a real production bug: the user-config
+ * tier short-circuits to score 1 and instantiates a GenericChatAdapter, so
+ * coomeet.com reported `platform=generic confidence=1` and the dedicated
+ * CooMeet/Flirtify adapters never ran. Shipped configs belong in
+ * `registerBuiltinConfigs`.
  *
  * The registry is append-only at runtime so new platforms can be registered
  * without touching the core.
  */
 export class PlatformDetector {
   private readonly builtins: PlatformAdapter[] = [];
+  private readonly builtinConfigs: SiteConfig[] = [];
   private readonly userConfigs: SiteConfig[] = [];
 
   constructor() {
@@ -34,6 +49,18 @@ export class PlatformDetector {
     this.builtins.push(adapter);
   }
 
+  /**
+   * Registers the shipped selector hints (COOMEET_CONFIG, FLIRTIFY_CONFIG,
+   * DEMO_CONFIG). They participate as a *lower* priority than the dedicated
+   * adapters so a shipped config can never displace an adapter that knows the
+   * platform properly.
+   */
+  registerBuiltinConfigs(configs: readonly SiteConfig[]): void {
+    this.builtinConfigs.length = 0;
+    this.builtinConfigs.push(...configs);
+  }
+
+  /** Registers operator-authored site configs. These win outright. */
   setUserConfigs(configs: SiteConfig[]): void {
     this.userConfigs.length = 0;
     this.userConfigs.push(...configs);
@@ -41,6 +68,36 @@ export class PlatformDetector {
 
   getUserConfigs(): SiteConfig[] {
     return [...this.userConfigs];
+  }
+
+  getBuiltinConfigs(): SiteConfig[] {
+    return [...this.builtinConfigs];
+  }
+
+  /**
+   * Whether any built-in adapter or registered config explicitly claims this
+   * URL's host.
+   *
+   * Used by the content script's frame policy: the manifest's match patterns
+   * already gate which origins the script can run on, and this is the finer
+   * filter that separates "a chat platform ROSE ships knowledge about" from
+   * "some other frame that happens to be injected into". The top frame is
+   * exempt — the generic adapter must still serve unclaimed hosts.
+   */
+  claimsHost(url: URL): boolean {
+    if (this.configFor(url, this.userConfigs) || this.configFor(url, this.builtinConfigs)) return true;
+    return this.builtins.some((a) => {
+      try {
+        return a.matches(url);
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  /** First config in `configs` whose host patterns match the URL, if any. */
+  private configFor(url: URL, configs: readonly SiteConfig[]): SiteConfig | null {
+    return configs.find((c) => c.hosts.some((h) => matchHost(url.hostname, h))) ?? null;
   }
 
   /**
@@ -53,14 +110,16 @@ export class PlatformDetector {
 
     const candidates: Array<{ adapter: PlatformAdapter; score: number }> = [];
 
-    // 1. User config for this host wins outright.
-    const userConfig = this.userConfigs.find((c) => c.hosts.some((h: string) => matchHost(url.hostname, h)));
+    // 1. A user config for this host wins outright. Score 1 is intentional here
+    //    and only here: the operator explicitly said "this is my site's markup".
+    const userConfig = this.configFor(url, this.userConfigs);
     if (userConfig) {
       candidates.push({ adapter: new GenericChatAdapter(userConfig), score: 1 });
       notes.push(`user config matched ${url.hostname}`);
     }
 
-    // 2. Built-in adapters.
+    // 2. Built-in adapters. These carry real platform knowledge, so they are
+    //    scored against the DOM rather than assumed.
     for (const adapter of this.builtins) {
       let score = 0;
       try {
@@ -73,7 +132,17 @@ export class PlatformDetector {
       if (score > 0) candidates.push({ adapter, score });
     }
 
-    // 3. Generic fallback, always evaluated.
+    // 3. Built-in configs as a GenericChatAdapter. This is the tier that used to
+    //    be (incorrectly) registered as a user config. It sits below the
+    //    dedicated adapters and above the pure-generic fallback.
+    const builtinConfig = this.configFor(url, this.builtinConfigs);
+    if (builtinConfig) {
+      const adapter = new GenericChatAdapter(builtinConfig);
+      candidates.push({ adapter, score: Math.max(adapter.score(doc), 0.3) });
+      notes.push(`builtin config matched ${url.hostname}`);
+    }
+
+    // 4. Generic fallback, always evaluated.
     const generic = new GenericChatAdapter();
     const genericScore = generic.score(doc);
     candidates.push({ adapter: generic, score: genericScore });
@@ -114,7 +183,7 @@ export class PlatformDetector {
   resolve(doc: Document = document): PlatformAdapter {
     const report = this.detect(doc);
     const url = documentUrl(doc);
-    const userConfig = this.userConfigs.find((c) => c.hosts.some((h: string) => matchHost(url.hostname, h)));
+    const userConfig = this.configFor(url, this.userConfigs);
     if (userConfig && report.confidence >= 0.95) return new GenericChatAdapter(userConfig);
     return (
       this.builtins.find((a) => a.id === report.platform) ?? new GenericChatAdapter()

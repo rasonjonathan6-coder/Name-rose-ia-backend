@@ -13,12 +13,19 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { startServer, startChatFrameServer, AI_PORT, CHAT_FRAME_PORT } from './server.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..', '..');
 const HOST = '127.0.0.1:8788';
 
-const PHASES = ['phase1-install.mjs', 'phase2-generic.mjs', 'phase3-demo.mjs', 'check-popup-flow.mjs'];
+const PHASES = [
+  'phase1-install.mjs',
+  'phase2-generic.mjs',
+  'phase3-demo.mjs',
+  'phase6-iframe.mjs',
+  'check-popup-flow.mjs',
+];
 
 async function serverIsUp() {
   try {
@@ -45,27 +52,21 @@ function runPhase(file) {
   });
 }
 
-const server = spawn(process.execPath, [join(here, 'server.mjs')], { stdio: ['ignore', 'pipe', 'pipe'] });
-let serverLog = '';
-server.stdout.on('data', (d) => (serverLog += d));
-server.stderr.on('data', (d) => (serverLog += d));
-
-const shutdown = () => {
-  if (!server.killed) server.kill('SIGTERM');
-};
-process.on('exit', shutdown);
-process.on('SIGINT', () => {
-  shutdown();
-  process.exit(130);
-});
-
 let failed = 0;
+let server = null;
+let chatServer = null;
 try {
+  // Check for a stale server *before* binding, otherwise the check would always
+  // see our own freshly started server and the guard would be meaningless.
   await assertPortFree();
+
+  server = await startServer(AI_PORT);
+  // Fixture G needs a second origin so its iframe is genuinely cross-origin.
+  chatServer = await startChatFrameServer(CHAT_FRAME_PORT);
 
   const deadline = Date.now() + 10_000;
   while (!(await serverIsUp())) {
-    if (Date.now() > deadline) throw new Error(`validation server did not start.\n${serverLog}`);
+    if (Date.now() > deadline) throw new Error(`validation server did not start on ${HOST}`);
     await new Promise((r) => setTimeout(r, 150));
   }
 
@@ -77,7 +78,8 @@ try {
   console.error(`\n[verify:browser] ${err.message}`);
   failed++;
 } finally {
-  shutdown();
+  server?.close();
+  chatServer?.close();
 }
 
 if (failed) {

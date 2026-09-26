@@ -12,6 +12,23 @@
 export const MSG = {
   // content -> background
   DETECTION_REPORT: 'rose/detection/report',
+  /**
+   * Sent from a frame that is being torn down (navigation, removal). Without it
+   * the overlay arbiter would keep believing a departed chat frame still owns
+   * the UI, and the tab would be left with no visible overlay at all.
+   */
+  FRAME_GONE: 'rose/frame/gone',
+  /**
+   * Overlay mirroring. On a platform whose chat lives in a child frame, the
+   * frame that holds the chat owns the *data* but must not draw the panel: a
+   * `position: fixed` panel inside an iframe is clipped to that iframe and could
+   * not be moved over the rest of the page. So the chat frame publishes its
+   * state and the top frame renders it. These three messages are the bridge;
+   * the service worker is the only channel that spans origins.
+   */
+  OVERLAY_SYNC: 'rose/overlay/sync',
+  OVERLAY_INTENT: 'rose/overlay/intent',
+  OVERLAY_MIRROR_READY: 'rose/overlay/mirror-ready',
   MESSAGE_DETECTED: 'rose/message/detected',
   CONVERSATION_ACTIVATED: 'rose/conversation/activated',
   REQUEST_SUGGESTIONS: 'rose/ai/suggestions',
@@ -19,7 +36,7 @@ export const MSG = {
   REQUEST_TRANSLATION: 'rose/translate',
   LOG: 'rose/log',
   STATS_EVENT: 'rose/stats/event',
-  ENABLE_SITE: 'rose/site/enable',
+  ACTIVATE_SITE: 'rose/site/activate',
   // background -> content
   STATE_UPDATED: 'rose/state/updated',
   SUGGESTIONS_READY: 'rose/ai/suggestions/ready',
@@ -58,6 +75,25 @@ export interface DetectionReport {
   notes: string[];
   detectedAt: number;
 }
+
+/**
+ * Identity of the frame a report came from.
+ *
+ * A platform may host its chat in a child frame (CooMeet serves the shell on
+ * www.coomeet.com and the chat on iframe.coomeet.com), so a report without frame
+ * identity cannot be attributed to the document that actually holds the
+ * conversation. `frameId` 0 is the top frame, per the extension platform.
+ */
+export interface FrameIdentity {
+  tabId: number | null;
+  frameId: number;
+  url: string;
+  /** `tabId:frameId:url` — stable per frame, changes when the frame navigates. */
+  key: string;
+}
+
+/** What a frame is allowed to do — mirrors content/frame-role. */
+export type FrameRoleName = 'top' | 'chat' | 'ignored';
 
 export interface RawMessage {
   /** Stable-ish key so the same DOM node is never processed twice. */
@@ -384,4 +420,32 @@ export type Command =
   | { action: 'pause-conversation'; conversationId: string; paused: boolean }
   | { action: 'rescan' }
   | { action: 'toggle-overlay' }
-  | { action: 'open-conversation'; conversationId: string };
+  | { action: 'open-conversation'; conversationId: string }
+  // Overlay arbitration across frames: the background decides which frame draws
+  // the panel (see background/frame-arbiter) and tells it to mount, and any
+  // previous renderer to stand down. `mirrorFor` names the frame holding the
+  // chat data when that is a different frame, so the panel renders another
+  // frame's state instead of its own.
+  | { action: 'mount-overlay'; mirrorFor: number | null }
+  | { action: 'unmount-overlay' }
+  // Panel mirroring between frames (see ui/remote-overlay for why).
+  | { action: 'mirror-state'; fromFrameId: number; state: Record<string, unknown>; mounted: boolean }
+  | { action: 'republish-overlay' }
+  | { action: 'overlay-intent'; intent: OverlayIntent };
+
+/**
+ * What the top frame may ask the chat frame to do.
+ *
+ * The overlay lives in the top frame because only there can a floating panel
+ * cover the whole window; the chat, the composer and the memory live in the chat
+ * frame. The two cannot touch each other directly (different origins), so the
+ * top frame forwards the operator's intent and the chat frame executes it.
+ */
+export type OverlayIntent =
+  | { action: 'generate'; force: boolean }
+  | { action: 'select'; index: number }
+  | { action: 'action'; kind: 'shorter' | 'longer' | 'translate' | 'copy' | 'insert' | 'send' }
+  | { action: 'set-mode'; mode: AutomationMode }
+  | { action: 'stop-all' }
+  | { action: 'pause-toggle' }
+  | { action: 'live-toggle' };

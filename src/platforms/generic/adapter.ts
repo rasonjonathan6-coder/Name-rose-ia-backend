@@ -40,7 +40,19 @@ const OUTGOING_HINTS = /(outgoing|outbound|sent|self|own|mine|right|message[-_]?
 // otherwise be harvested as messages and answered as if a client wrote them.
 const CONTROL_HINTS = /(button|toolbar|composer|actions?|controls?|icon|emoji|attach|upload|menu)/i;
 
-const NEGATIVE_INPUT_HINTS = /(search|recherche|find|filter|username|password|email|login|signup|captcha|code|phone|name)/i;
+// Fields that are never a chat composer. Two constraints shaped this list:
+//
+//  * word boundaries — the old pattern had none, so the universal HTML attribute
+//    `name` and common class fragments like `code` rejected valid composers
+//    (e.g. `data-testid="editor-code"`);
+//  * no over-generic terms — `name`, `code`, `find` were dropped entirely
+//    because they are overwhelmingly used for non-login UI. `find` is covered
+//    by `search` where it matters, and identity fields by `username`/`login`.
+//
+// The gate only fires when no positive INPUT_HINTS match either, so a composer
+// that also says "message" is still accepted.
+const NEGATIVE_INPUT_HINTS =
+  /(\bsearch\b|\brecherche\b|\bfilter\b|\busername\b|\bpassword\b|\bemail\b|\blogin\b|\bsignup\b|\bsign-in\b|\bcaptcha\b|\bphone\b|\bmot de passe\b)/i;
 
 // Timestamps, delivery state and other per-message chrome. Excluded from the
 // text so the model is not asked to answer a clock.
@@ -626,6 +638,13 @@ export class GenericChatAdapter extends BaseAdapter {
       '[class*="interlocutor"]',
       '[class*="companion"]',
       '[class*="stranger"][class*="name"]',
+      // id-based variants: fixtures and real sites name the element by id rather
+      // than class, and matching only `[class*=]` silently missed them.
+      '[id*="partner"][id*="name"]',
+      '[id*="user"][id*="name"]',
+      '[id*="display"][id*="name"]',
+      '[id*="interlocutor"]',
+      '[id*="companion"]',
       'header h1',
       'header h2',
       '[class*="chat"][class*="header"] h1',

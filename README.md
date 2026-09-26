@@ -19,6 +19,7 @@ platform in a browser.
 | Feature | Implemented | Tested | Works in production |
 | --- | --- | --- | --- |
 | Generic detector / heuristics | yes | yes (63 detection tests + 6-shape browser harness + live-site harness) | yes — resolves a real composer on web.libera.chat; correctly reports "no conversation" on chat-less pages |
+| Cross-origin iframe chat (CooMeet shape) | yes | yes (16 arbiter + 23 frame-role tests + Phase 6 browser harness) | yes on the harness — the shell's panel mirrors the chat frame's name, incoming message and suggestions, and inserts into the frame's composer |
 | Chat / message detection | yes | yes (E2E + adapter tests + 6-shape browser harness) | yes on the local demo harness; live pages tested had no chat DOM (see below) |
 | Reply-field detection + text insertion | yes | yes (E2E insertion tests) | yes — text written into web.libera.chat's real composer and read back |
 | Runtime site activation (host grant + dynamic script) | yes | yes (popup-flow check) | yes — registers and injects on an arbitrary live origin |
@@ -257,5 +258,5 @@ the generic heuristics are not enough.
 | `npm test` | Full test suite |
 | `npm run typecheck` | TypeScript check |
 | `npm run verify` | typecheck + test + build |
-| `npm run verify:browser` | Starts its own mock server and drives all three phases (install, generic detection, demo) in headless Chrome. Needs `npm run build` first |
+| `npm run verify:browser` | Starts its own mock server and drives every browser phase (install, generic detection, demo, cross-origin iframe, popup flow) in headless Chrome. Needs `npm run build` first |
 | `npm run demo` | Build and serve the local demo |

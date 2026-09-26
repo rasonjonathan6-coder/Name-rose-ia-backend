@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture G — chat inside a cross-origin iframe (CooMeet shape)</title>
+<link rel="stylesheet" href="/common.css" />
+<style>
+  .shell { display: flex; flex-direction: column; height: 100vh; }
+  .shell-note { padding: 10px 14px; font-size: 13px; color: #9aa; }
+  iframe { flex: 1; width: 100%; border: 0; background: #111; }
+</style>
+</head>
+<body>
+<!--
+  Reproduces the structural problem found on CooMeet: the page the operator sees
+  is a shell with NO chat surface of its own, and the conversation is served from
+  a different origin inside a child frame.
+
+  The child frame is served on 127.0.0.1:8789, while this shell is on
+  127.0.0.1:8788. Different origin, so the frame is genuinely cross-origin and
+  the parent cannot reach into it — exactly like www.coomeet.com and
+  iframe.coomeet.com.
+
+  This shell deliberately contains a decoy search field, so a fix that simply
+  "writes into the first text field of the top frame" is caught rather than
+  passing by accident.
+-->
+<div class="shell">
+  <div class="shell-note">
+    Fixture G — shell with no chat. The conversation lives in a cross-origin child frame
+    (127.0.0.1:8789). Decoy: <input id="shell-search" type="search" placeholder="Search partners" />
+  </div>
+  <iframe id="chat-frame" src="http://127.0.0.1:8789/g-chat-frame.html" title="Chat"></iframe>
+</div>
+
+<script>
+  // Nothing here exposes a chat surface. The harness reaches the chat by
+  // targeting the child frame explicitly.
+  window.__shell = {
+    frameSrc: () => document.getElementById('chat-frame').src,
+    hasComposer: () => !!document.querySelector('textarea, [contenteditable="true"]'),
+  };
+</script>
+</body>
+</html>

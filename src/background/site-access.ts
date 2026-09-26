@@ -1,11 +1,19 @@
 /**
- * Runtime host access.
+ * Runtime host access — post-grant activation.
  *
  * The manifest can only declare content scripts for a fixed list of origins, so
  * any other chat platform — the whole point of the generic adapter — needs the
- * user to grant its host at runtime. This module owns that flow: request the
- * permission, register a persistent dynamic content script, and inject into the
- * current tab so the user does not have to reload.
+ * user to grant its host at runtime. This module owns everything that happens
+ * *after* that grant: verify it, register a persistent dynamic content script,
+ * and inject into the current tab so the user does not have to reload.
+ *
+ * It deliberately cannot request the permission. `chrome.permissions.request()`
+ * is only legal while a user gesture is being handled, and this code runs in the
+ * service worker, which never receives one — calling it here is what produced
+ * "This function must be called during a user gesture". The popup owns the
+ * request (see `src/popup/site-grant.ts`); the background only consumes the
+ * result. The `SiteAccessApi` type has no `request` member so the mistake cannot
+ * be reintroduced without a compile error.
  */
 
 import { log } from '@/core/logging/logger';
@@ -14,7 +22,6 @@ import { log } from '@/core/logging/logger';
 export interface SiteAccessApi {
   permissions: {
     contains(details: { origins: string[] }): Promise<boolean>;
-    request(details: { origins: string[] }): Promise<boolean>;
   };
   scripting: {
     getRegisteredContentScripts(filter?: { ids?: string[] }): Promise<Array<{ id: string }>>;
@@ -24,10 +31,13 @@ export interface SiteAccessApi {
         matches: string[];
         js: string[];
         runAt: 'document_idle';
+        allFrames: boolean;
         persistAcrossSessions: boolean;
       }>,
     ): Promise<void>;
-    executeScript(details: { target: { tabId: number }; files: string[] }): Promise<unknown>;
+    executeScript(
+      details: { target: { tabId: number; allFrames?: boolean }; files: string[] },
+    ): Promise<unknown>;
   };
   tabs: {
     query(query: { active: true; currentWindow: true }): Promise<Array<{ id?: number; url?: string }>>;
@@ -49,23 +59,33 @@ export function scriptIdFor(host: string): string {
 }
 
 /**
- * Grants ROSE access to `host` and starts the content script there.
+ * Activates ROSE on `host`, assuming the host permission has already been
+ * granted by the popup. Registers the content script and injects into the
+ * current tab.
+ *
+ * The grant is re-checked rather than trusted, because this is reachable by
+ * message: it must not be possible to register a content script for an origin
+ * the user never approved.
  *
  * Every failure is returned rather than thrown so the caller can surface a
  * clear message instead of an unhandled rejection.
  */
-export async function enableSite(api: SiteAccessApi, host: string): Promise<SiteAccessResult> {
+export async function activateSite(api: SiteAccessApi, host: string): Promise<SiteAccessResult> {
   if (!host) return { ok: false, error: 'No host supplied.' };
 
   const origin = originFor(host);
 
   try {
-    let granted = await api.permissions.contains({ origins: [origin] });
-    if (!granted) granted = await api.permissions.request({ origins: [origin] });
-    if (!granted) return { ok: false, error: 'Permission was not granted.' };
+    const granted = await api.permissions.contains({ origins: [origin] });
+    if (!granted) {
+      return {
+        ok: false,
+        error: 'ROSE does not have permission for this site yet. Open the popup and click “Enable ROSE on this host”.',
+      };
+    }
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `Could not request permission: ${text}` };
+    return { ok: false, error: `Could not verify permission: ${text}` };
   }
 
   const scriptId = scriptIdFor(host);
@@ -78,6 +98,10 @@ export async function enableSite(api: SiteAccessApi, host: string): Promise<Site
           matches: [origin],
           js: ['content.js'],
           runAt: 'document_idle',
+          // Mirrors the manifest: a chat platform may host its chat in a child
+          // frame (CooMeet), so the dynamically-registered script must reach
+          // those frames too.
+          allFrames: true,
           persistAcrossSessions: true,
         },
       ]);

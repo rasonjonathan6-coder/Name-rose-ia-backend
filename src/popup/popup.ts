@@ -13,6 +13,7 @@ import * as storage from '@/storage';
 import { canUseAI } from '@/core/safety/policy';
 import { summarise } from '@/core/stats/recorder';
 import { STATE_LABELS } from '@/core/automation/state-machine';
+import { hasHostPermission as hasHostPermissionFor, requestHostPermission } from './site-grant';
 import {
   applyTheme,
   formatCost,
@@ -44,19 +45,22 @@ async function render(): Promise<void> {
   const host = hostOf(tab?.url) || 'no page';
 
   // --- header ---
-  const header = h('div', { class: 'row between', style: 'margin-bottom:12px;' });
+  const header = h('div', { class: 'row between', style: 'margin-bottom:14px;' });
   header.appendChild(
-    h('div', { class: 'row', style: 'gap:9px;' },
+    h('div', { class: 'row', style: 'gap:10px;' },
       h('span', {
         class: 'mark',
         style:
-          'width:30px;height:30px;border-radius:10px;background:linear-gradient(135deg,var(--violet),var(--rose));display:grid;place-items:center;font-weight:800;color:#fff;',
+          'width:32px;height:32px;border-radius:11px;background:linear-gradient(135deg,var(--violet),var(--rose));display:grid;place-items:center;font-weight:800;color:#fff;font-size:14px;box-shadow:0 4px 14px color-mix(in srgb,var(--violet) 45%,transparent);',
         text: 'R',
       }),
-      h('div', {}, h('div', { style: 'font-weight:800;font-size:14px;', text: 'ROSE IA' }), h('div', { style: 'font-size:10px;color:var(--text-faint);', text: host })),
+      h('div', {},
+        h('div', { style: 'font-weight:800;font-size:14px;letter-spacing:.2px;', text: 'ROSE IA' }),
+        h('div', { style: 'font-size:10px;color:var(--text-faint);', text: host }),
+      ),
     ),
   );
-  const gear = h('button', { class: 'btn sm ghost', text: '⚙', title: 'Settings' });
+  const gear = h('button', { class: 'btn sm ghost', text: '⚙', title: 'Settings', 'aria-label': 'Settings' });
   gear.addEventListener('click', () => openPage('options/options.html'));
   header.appendChild(gear);
   root.appendChild(header);
@@ -70,6 +74,10 @@ async function render(): Promise<void> {
   if (supported && !(await hasHostPermission(host))) {
     // The generic adapter can run anywhere, but the manifest cannot pre-declare
     // every origin. Ask the browser for this one host on demand.
+    //
+    // Nothing is requested here: merely opening the popup must never prompt.
+    // The grant is requested from the click handler below, which is the only
+    // place Chrome accepts it.
     root.appendChild(
       h('div', { class: 'notice' },
         h('span', { class: 'ico', text: '🔓' }),
@@ -77,16 +85,10 @@ async function render(): Promise<void> {
       ),
     );
     const enable = h('button', { class: 'btn primary', text: `Enable ROSE on ${host}`, style: 'width:100%;margin-bottom:10px;' });
-    enable.addEventListener('click', async () => {
-      enable.disabled = true;
-      const res = await rpc(MSG.ENABLE_SITE, { host });
-      if (res.ok) {
-        toast(`ROSE enabled on ${host}. Reloading the tab…`, 'success');
-        if (tab?.id) void globalThis.chrome?.tabs.reload(tab.id);
-      } else {
-        enable.disabled = false;
-        toast(res.error ?? 'Could not enable ROSE on this site.', 'error');
-      }
+    // No `async` before the request: awaiting anything first would consume the
+    // gesture and Chrome would reject the call.
+    enable.addEventListener('click', () => {
+      void grantAndActivate(host, enable);
     });
     root.appendChild(enable);
   }
@@ -123,17 +125,18 @@ async function render(): Promise<void> {
 
   // --- mode selector ---
   const modeCard = h('div', { class: 'card' });
-  modeCard.appendChild(h('h3', { text: 'Mode', style: 'margin-bottom:8px;' }));
-  const modeRow = h('div', { class: 'row', style: 'gap:5px;' });
+  modeCard.appendChild(h('div', { class: 'card-label', style: 'margin-bottom:9px;', text: 'Mode' }));
+  const modeRow = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Automation mode' });
   for (const m of [
     { id: 'manual' as AutomationMode, label: 'Manual' },
     { id: 'assisted' as AutomationMode, label: 'Assisted' },
     { id: 'auto' as AutomationMode, label: 'Auto' },
   ]) {
+    const active = settings.automation.mode === m.id;
     const btn = h('button', {
-      class: `btn sm ${settings.automation.mode === m.id ? 'primary' : ''}`,
+      type: 'button',
+      'aria-pressed': active ? 'true' : 'false',
       text: m.label,
-      style: 'flex:1;',
     });
     btn.addEventListener('click', async () => {
       if (m.id === 'auto' && !window.confirm('Enable AUTO mode? ROSE will insert and send replies automatically after the configured delay. The STOP button always takes back control.')) return;
@@ -146,7 +149,7 @@ async function render(): Promise<void> {
   }
   modeCard.appendChild(modeRow);
   modeCard.appendChild(
-    h('div', { style: 'font-size:10.5px;color:var(--text-faint);margin-top:7px;', text: STATE_LABELS[settings.automation.globalPaused ? 'paused' : 'idle'] + (settings.automation.globalPaused ? ' — automation halted' : '') }),
+    h('div', { style: 'font-size:10.5px;color:var(--text-faint);margin-top:9px;', text: STATE_LABELS[settings.automation.globalPaused ? 'paused' : 'idle'] + (settings.automation.globalPaused ? ' — automation halted' : '') }),
   );
   root.appendChild(modeCard);
 
@@ -236,18 +239,38 @@ function miniStat(k: string, v: string): HTMLElement {
 
 /**
  * True when ROSE already holds host permission for this hostname, either from
- * the static manifest list or a previous runtime grant.
+ * the static manifest list or a previous runtime grant. Never prompts — see
+ * `site-grant.ts`.
  */
 async function hasHostPermission(host: string): Promise<boolean> {
-  const g = globalThis as unknown as { chrome?: typeof chrome };
-  if (!host || !g.chrome?.permissions?.contains) return true; // cannot tell → do not nag
-  try {
-    return await g.chrome.permissions.contains({
-      origins: [`https://${host}/*`, `http://${host}/*`],
-    });
-  } catch {
-    return true;
+  return hasHostPermissionFor(host);
+}
+
+/**
+ * Requests the host grant, then asks the background to register and inject the
+ * content script. Called from the Enable button's click listener.
+ *
+ * `requestHostPermission` is the first await in this function, so the browser's
+ * gesture check still sees the click that started it.
+ */
+async function grantAndActivate(host: string, button: HTMLButtonElement): Promise<void> {
+  button.disabled = true;
+  const grant = await requestHostPermission(host);
+  if (!grant.granted) {
+    button.disabled = false;
+    toast(grant.error, 'error');
+    return;
   }
+
+  const res = await rpc(MSG.ACTIVATE_SITE, { host });
+  if (!res.ok) {
+    button.disabled = false;
+    toast(res.error ?? 'Access was granted, but ROSE could not start on this site.', 'error');
+    return;
+  }
+
+  toast(`ROSE enabled on ${host}. Reloading the tab…`, 'success');
+  if (tab?.id) void globalThis.chrome?.tabs.reload(tab.id);
 }
 
 /** Sends a command to the content script on the active tab. */
