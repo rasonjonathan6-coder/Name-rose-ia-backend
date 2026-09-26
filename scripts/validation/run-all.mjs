@@ -18,7 +18,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..', '..');
 const HOST = '127.0.0.1:8788';
 
-const PHASES = ['phase1-install.mjs', 'phase2-generic.mjs', 'phase3-demo.mjs'];
+const PHASES = ['phase1-install.mjs', 'phase2-generic.mjs', 'phase3-demo.mjs', 'check-popup-flow.mjs'];
 
 async function serverIsUp() {
   try {

@@ -45,12 +45,16 @@ permissions are defined there, not in a checked-in manifest.
   `scripts/cdp.mjs` for anything touching `chrome.*` or the content script's
   `window.ROSE_IA`.
 - Browser validation runs via `npm run verify:browser`, which starts its own
-  mock server, runs all three phases, and shuts the server down:
+  mock server, runs all phases, and shuts the server down:
   `phase1-install.mjs` (extension surfaces), `phase2-generic.mjs` (detector +
-  injection against six fixture shapes in `scripts/validation/fixtures/`), and
-  `phase3-demo.mjs` (the built extension driving `demo/demo.html` end to end).
+  injection against six fixture shapes in `scripts/validation/fixtures/`),
+  `phase3-demo.mjs` (the built extension driving `demo/demo.html` end to end),
+  and `check-popup-flow.mjs` (popup activation ordering). `npm run verify:live`
+  runs `phase4-live.mjs` against real sites instead of fixtures.
   `scripts/validation/probe-container.mjs` prints which container/messages the
   adapter resolves on a fixture — use it first when detection misbehaves.
+  `scripts/validation/probe-live-site.mjs <url>` does the same against a real
+  site (read-only, never inserts) when deciding whether an adapter is warranted.
   The runner refuses to start if something already holds port 8788, because a
   leftover server serves the previous build and makes a green run meaningless.
 - **The mock provider in `scripts/validation/server.mjs` must mirror the real
@@ -120,6 +124,32 @@ mind before "simplifying" the heuristics:
   seconds ROSE forgot its container and reported page chrome as messages.
 - **Fall back to unscoped candidates only when the container was not confidently
   identified** — otherwise an empty chat reports the page header as a message.
+- **A guessed container and the unscoped fallback both require a composer.** Live
+  marketing pages (coomeet.com, flirtify.com) have no chat DOM, but layout-only
+  scoring picked the language picker and the FAQ list, and the unscoped fallback
+  returned nav items and marketing copy ("Europe", "9+ million users") as the
+  client's messages. No reply field means no conversation.
+- **Nav/control surfaces are excluded before scoring (`NON_CONTAINER_HINTS`).**
+  `ul.language-dropdown__list` satisfies `MESSAGE_CONTAINER_HINTS` via "…list…"
+  and is a repeated-child list, so it outscored the real (empty) log.
+
+## Live-site validation (`scripts/validation/phase4-live.mjs`)
+
+Real Chromium, real sites, extension loaded. Two things to know before editing it:
+
+- **Activation RPCs must be sent from an extension page.** Calling
+  `rose/site/enable` from the page needs a content script, which is what
+  activation is meant to create — the call cannot bootstrap itself. The harness
+  opens `options/options.html` and sends from there, exactly like the popup.
+- **Chrome's host-permission prompt cannot be automated.** It is a native bubble
+  with no DOM and no window; CDP and xdotool both fail to click it. The harness
+  seeds the resulting grant into a persistent profile (`seedHostPermission` in
+  `helpers.mjs`), which writes what the prompt would have written. Only the grant
+  is faked; everything downstream is ROSE's own code.
+- A persistent profile must be closed gracefully (`Browser.close` sends SIGTERM)
+  or Chrome never flushes `Preferences`. `launch` also clears a stale
+  `DevToolsActivePort`, otherwise relaunching on the same profile reads the
+  previous run's dead port.
 
 ## Honesty requirement
 
@@ -128,3 +158,9 @@ verified. `README.md` carries the status table. CooMeet, Flirtify and the live
 call assistant are unit-tested against fixtures but were **never** verified
 against a live platform session — do not upgrade those rows without actually
 testing them.
+
+Live validation did verify the generic path end to end on `web.libera.chat`
+(runtime activation → injection → overlay → composer detection → text insertion
+read back). CooMeet and Flirtify could not be verified because their chat
+requires an authenticated video session; their public pages are marketing pages
+with no chat DOM, and ROSE now correctly reports "no conversation" there.

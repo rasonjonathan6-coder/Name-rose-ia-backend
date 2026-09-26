@@ -6,6 +6,8 @@
  * from content scripts, and DOM assertions in the page. Nothing is stubbed.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { sleep } from '../cdp.mjs';
 
 export { sleep };
@@ -237,6 +239,33 @@ export async function tabIdOf(browser, session) {
   );
   void targetId;
   return id;
+}
+
+/**
+ * Grants a host permission by writing it into a *persistent* test profile.
+ *
+ * Chrome's host-permission prompt is a native bubble that cannot be answered
+ * from automation, so an end-to-end run on an arbitrary live site cannot click
+ * through it. This seeds exactly what the prompt would have produced
+ * (`explicit_host` in the extension's granted permissions) so the rest of the
+ * flow — ROSE's own `enableSite` registration and injection — runs untouched.
+ *
+ * Requires `Browser.launch({ userDataDir })`, which closes gracefully so Chrome
+ * flushes Preferences.
+ */
+export function seedHostPermission(profileDir, extensionId, origins) {
+  const prefPath = path.join(profileDir, 'Default', 'Preferences');
+  const raw = fs.readFileSync(prefPath, 'utf8');
+  const prefs = JSON.parse(raw);
+  const entry = prefs.extensions?.settings?.[extensionId];
+  if (!entry) throw new Error(`extension ${extensionId} not present in ${prefPath}`);
+  for (const key of ['granted_permissions', 'active_permissions']) {
+    const perms = (entry[key] ??= {});
+    const list = (perms.explicit_host ??= []);
+    for (const origin of origins) if (!list.includes(origin)) list.push(origin);
+  }
+  fs.writeFileSync(prefPath, JSON.stringify(prefs));
+  return origins;
 }
 
 /** Minimal assertion collector producing the phase report. */

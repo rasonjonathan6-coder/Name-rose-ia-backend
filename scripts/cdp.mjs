@@ -65,10 +65,14 @@ export class Cdp {
         return;
       }
       if (msg.id !== undefined && this.pending.has(msg.id)) {
-        const { resolve, reject } = this.pending.get(msg.id);
+        const { resolve, reject, method } = this.pending.get(msg.id);
         this.pending.delete(msg.id);
-        if (msg.error) reject(new Error(`${msg.error.message}${msg.error.data ? ` — ${msg.error.data}` : ''}`));
-        else resolve(msg.result);
+        if (msg.error) {
+          // Name the method: a bare "Cannot find context" says nothing about
+          // which call died, and these are usually fired from deep inside a
+          // helper where the stack is pure WebSocket internals.
+          reject(new Error(`${method}: ${msg.error.message}${msg.error.data ? ` — ${msg.error.data}` : ''}`));
+        } else resolve(msg.result);
         return;
       }
       if (msg.method) {
@@ -92,7 +96,7 @@ export class Cdp {
     if (this.closed) return Promise.reject(new Error('CDP connection closed'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, method });
       this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
       setTimeout(() => {
         if (this.pending.has(id)) {
@@ -136,10 +140,11 @@ export class Cdp {
 
 /** A running browser with the extension loaded. */
 export class Browser {
-  constructor(child, cdp, userDataDir, port) {
+  constructor(child, cdp, userDataDir, port, persistent = false) {
     this.child = child;
     this.cdp = cdp;
     this.userDataDir = userDataDir;
+    this.persistentProfile = persistent;
     this.port = port;
     this.sessions = new Map();
   }
@@ -148,11 +153,20 @@ export class Browser {
    * Launches Chromium with ROSE loaded as an unpacked extension and exposes
    * remote debugging on a private port.
    */
-  static async launch({ extensionDir, headless = true, extraArgs = [], windowSize = '1280,900' } = {}) {
-    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rose-chrome-'));
+  static async launch({ extensionDir, headless = true, extraArgs = [], windowSize = '1280,900', userDataDir = null } = {}) {
+    const persistent = !!userDataDir;
+    const dir = userDataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'rose-chrome-'));
     const binary = findChrome();
+    // A reused profile still holds the previous run's DevToolsActivePort. Chrome
+    // only rewrites it once it is listening, so leaving it in place makes the
+    // wait below read a dead port and fail with "Could not reach /json/version".
+    try {
+      fs.rmSync(path.join(dir, 'DevToolsActivePort'), { force: true });
+    } catch {
+      /* best effort */
+    }
     const args = [
-      `--user-data-dir=${userDataDir}`,
+      `--user-data-dir=${dir}`,
       '--remote-debugging-port=0',
       '--no-first-run',
       '--no-default-browser-check',
@@ -178,7 +192,7 @@ export class Browser {
     child.stdout.on('data', () => {});
 
     // Chromium writes the actual port to DevToolsActivePort once it is listening.
-    const portFile = path.join(userDataDir, 'DevToolsActivePort');
+    const portFile = path.join(dir, 'DevToolsActivePort');
     let port = null;
     for (let i = 0; i < 300; i++) {
       if (fs.existsSync(portFile)) {
@@ -219,7 +233,7 @@ export class Browser {
     }
 
     const cdp = await Cdp.connect(browserWs);
-    return new Browser(child, cdp, userDataDir, port);
+    return new Browser(child, cdp, dir, port, persistent);
   }
 
   /** All targets the browser currently knows about. */
@@ -261,8 +275,23 @@ export class Browser {
     // session: page navigation destroys and recreates them, so the newest one
     // must be used rather than the one seen at attach time.
     const contexts = [];
-    const off = this.cdp.on('Runtime.executionContextCreated', (params, sid) => {
+    const offCreated = this.cdp.on('Runtime.executionContextCreated', (params, sid) => {
       if (sid === sessionId) contexts.push(params.context);
+    });
+    // Chrome announces a fresh default context per navigation and destroys the
+    // old ones. Keeping destroyed ids in the list makes "newest context" point
+    // at a corpse: the isolated world still works while every page-world eval
+    // dies with "Cannot find context with specified id". Track destruction so
+    // the newest entry is always live.
+    const offDestroyed = this.cdp.on('Runtime.executionContextDestroyed', (params, sid) => {
+      if (sid !== sessionId) return;
+      const dead = params.executionContextId;
+      for (let i = contexts.length - 1; i >= 0; i--) {
+        if (contexts[i].id === dead) contexts.splice(i, 1);
+      }
+    });
+    const offCleared = this.cdp.on('Runtime.executionContextsCleared', (_params, sid) => {
+      if (sid === sessionId) contexts.length = 0;
     });
     await send('Runtime.enable').catch(() => {});
     await send('Page.enable').catch(() => {});
@@ -290,7 +319,11 @@ export class Browser {
       get isolatedContextId() {
         return pickContext(contexts, 'isolated');
       },
-      detach: off,
+      detach: () => {
+        offCreated();
+        offDestroyed();
+        offCleared();
+      },
     };
     return session;
   }
@@ -340,9 +373,17 @@ export class Browser {
       });
     } catch (err) {
       // A navigation can destroy the context between picking its id and using
-      // it. Wait for the replacement context and try again.
-      if (_attempt < 3 && /Cannot find context/i.test(err.message)) {
-        await sleep(150);
+      // it. Wait for a *replacement* context rather than sleeping a fixed time:
+      // a slow redirect can take longer than any fixed sleep, and retrying with
+      // the same dead id just fails again.
+      if (_attempt < 8 && /Cannot find context/i.test(err.message)) {
+        const deadId = contextId;
+        const deadline = Date.now() + 1000;
+        while (Date.now() < deadline) {
+          const fresh = world === 'isolated' ? session.isolatedContextId : session.contextId;
+          if (fresh !== undefined && fresh !== deadId) break;
+          await sleep(100);
+        }
         return this.eval(session, expression, { awaitPromise, _attempt: _attempt + 1, world });
       }
       throw err;
@@ -396,6 +437,19 @@ export class Browser {
       this.cdp.close();
     } catch {
       /* ignore */
+    }
+    if (this.persistentProfile) {
+      // A persistent profile is only useful if Chrome gets to write it back, so
+      // ask for a clean shutdown instead of SIGKILL. Callers that intend to
+      // reuse the profile (seed a permission grant, then relaunch) depend on it.
+      this.child.kill('SIGTERM');
+      await new Promise((resolve) => {
+        const done = () => resolve();
+        this.child.once('exit', done);
+        setTimeout(done, 6000);
+      });
+      await sleep(300);
+      return;
     }
     this.child.kill('SIGKILL');
     await sleep(200);

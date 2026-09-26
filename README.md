@@ -18,9 +18,10 @@ platform in a browser.
 
 | Feature | Implemented | Tested | Works in production |
 | --- | --- | --- | --- |
-| Generic detector / heuristics | yes | yes (60 detection tests + 6-shape browser harness) | yes on the local demo harness |
-| Chat / message detection | yes | yes (E2E + adapter tests + 6-shape browser harness) | yes on the local demo harness |
-| Reply-field detection + text insertion | yes | yes (E2E insertion tests) | yes on the local demo harness |
+| Generic detector / heuristics | yes | yes (63 detection tests + 6-shape browser harness + live-site harness) | yes — resolves a real composer on web.libera.chat; correctly reports "no conversation" on chat-less pages |
+| Chat / message detection | yes | yes (E2E + adapter tests + 6-shape browser harness) | yes on the local demo harness; live pages tested had no chat DOM (see below) |
+| Reply-field detection + text insertion | yes | yes (E2E insertion tests) | yes — text written into web.libera.chat's real composer and read back |
+| Runtime site activation (host grant + dynamic script) | yes | yes (popup-flow check) | yes — registers and injects on an arbitrary live origin |
 | AI generation (OpenAI-compatible / OpenRouter) | yes | yes (37 generation + 18 client tests) | against a real HTTP server in tests; not billed against a live provider in CI |
 | Client memory + isolation | yes | yes (22 memory + 27 E2E tests) | yes |
 | Translation / language detection | yes | yes (17 language tests) | yes |
@@ -36,6 +37,31 @@ The CooMeet, Flirtify and live-assistant rows are deliberately not claimed as
 working in production. Their adapters are unit-tested against representative DOM
 fixtures, but no live platform session was used to confirm them. Revenue
 figures are **not** displayed anywhere, because ROSE does not invent data.
+
+### Live-site validation (Phase 4)
+
+`npm run verify:live` runs ROSE against real sites in a real Chromium with the
+extension loaded. It reports what it observes rather than assuming success.
+
+What it can prove, and did:
+
+- ROSE's runtime activation path works end to end on an arbitrary origin
+  (`web.libera.chat`): the host grant is honoured, a dynamic content script is
+  registered, the script is injected, the overlay mounts, the generic adapter
+  finds the site's real composer, and text is inserted into it and read back.
+- On pages with no chat UI (`coomeet.com`, `flirtify.com` marketing pages) ROSE
+  reports no conversation instead of mistaking nav items and marketing copy for
+  the client's messages.
+
+What it cannot prove:
+
+- Chrome's host-permission prompt is a native bubble with no DOM and no window,
+  so it cannot be clicked by CDP or xdotool. The harness seeds the resulting
+  grant into a persistent test profile, which is exactly what the prompt writes.
+  Everything downstream of the grant is ROSE's own code and runs untouched.
+- CooMeet and Flirtify chat require an authenticated video session. Their public
+  pages are marketing pages with no chat DOM, so the CooMeet/Flirtify adapters
+  remain **not verified** against a live session.
 
 ---
 

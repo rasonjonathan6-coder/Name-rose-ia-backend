@@ -61,6 +61,36 @@ async function render(): Promise<void> {
   header.appendChild(gear);
   root.appendChild(header);
 
+  // --- site access ---
+  // Checked before the AI policy gate on purpose: granting ROSE access to a host
+  // is what makes the extension run there at all, and it has nothing to do with
+  // AI configuration. When this lived in the `else if` below, an unacknowledged
+  // policy returned early and the Enable button was unreachable — a fresh install
+  // could never turn ROSE on for a new platform.
+  if (supported && !(await hasHostPermission(host))) {
+    // The generic adapter can run anywhere, but the manifest cannot pre-declare
+    // every origin. Ask the browser for this one host on demand.
+    root.appendChild(
+      h('div', { class: 'notice' },
+        h('span', { class: 'ico', text: '🔓' }),
+        h('span', { text: `ROSE is not enabled on ${host} yet. Grant access once and it will run here from now on.` }),
+      ),
+    );
+    const enable = h('button', { class: 'btn primary', text: `Enable ROSE on ${host}`, style: 'width:100%;margin-bottom:10px;' });
+    enable.addEventListener('click', async () => {
+      enable.disabled = true;
+      const res = await rpc(MSG.ENABLE_SITE, { host });
+      if (res.ok) {
+        toast(`ROSE enabled on ${host}. Reloading the tab…`, 'success');
+        if (tab?.id) void globalThis.chrome?.tabs.reload(tab.id);
+      } else {
+        enable.disabled = false;
+        toast(res.error ?? 'Could not enable ROSE on this site.', 'error');
+      }
+    });
+    root.appendChild(enable);
+  }
+
   // --- policy gate ---
   if (!canUseAI(settings).allowed) {
     const warn = h('div', { class: 'notice warn' });
@@ -89,28 +119,6 @@ async function render(): Promise<void> {
       if (url) void g.chrome?.tabs?.create?.({ url });
     });
     root.appendChild(demo);
-  } else if (!(await hasHostPermission(host))) {
-    // The generic adapter can run anywhere, but the manifest cannot pre-declare
-    // every origin. Ask the browser for this one host on demand.
-    root.appendChild(
-      h('div', { class: 'notice' },
-        h('span', { class: 'ico', text: '🔓' }),
-        h('span', { text: `ROSE is not enabled on ${host} yet. Grant access once and it will run here from now on.` }),
-      ),
-    );
-    const enable = h('button', { class: 'btn primary', text: `Enable ROSE on ${host}`, style: 'width:100%;margin-bottom:10px;' });
-    enable.addEventListener('click', async () => {
-      enable.disabled = true;
-      const res = await rpc(MSG.ENABLE_SITE, { host });
-      if (res.ok) {
-        toast(`ROSE enabled on ${host}. Reloading the tab…`, 'success');
-        if (tab?.id) void globalThis.chrome?.tabs.reload(tab.id);
-      } else {
-        enable.disabled = false;
-        toast(res.error ?? 'Could not enable ROSE on this site.', 'error');
-      }
-    });
-    root.appendChild(enable);
   }
 
   // --- mode selector ---

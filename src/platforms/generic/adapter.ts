@@ -25,6 +25,12 @@ const SEND_HINTS = /^(send|envoyer|senden|enviar|отправить|发送|送�
 const MESSAGE_CONTAINER_HINTS =
   /(messages?|chat[-_]?(log|list|body|history|window|messages|content|thread|feed|stream)|conversation|dialog|timeline|history|transcript|feed)/i;
 
+// Navigation and control surfaces that score like a message list purely because
+// they are repeated-child lists with "list"/"menu" in the name. Found live on
+// flirtify.com: the language picker `ul.language-dropdown__list` was returned as
+// the message container. A real message log is never classed "dropdown"/"navbar".
+const NON_CONTAINER_HINTS = /(dropdown|nav[-_]?bar|navbar|breadcrumb|menu|tab[-_]?list|accordion|carousel|pagination|toolbar)/i;
+
 const INCOMING_HINTS =
   /(incoming|inbound|received|them|other|partner|client|stranger|guest|peer|left|remote|message[-_]?in)/i;
 const OUTGOING_HINTS = /(outgoing|outbound|sent|self|own|mine|right|message[-_]?out)/i;
@@ -291,8 +297,14 @@ export class GenericChatAdapter extends BaseAdapter {
     const structural = scored.find((c) => holdsMessages(c.el));
     if (structural) return { el: structural.el, hinted: true };
 
+    // Nothing on the page holds message-shaped children, so any container here is
+    // a guess from layout alone. On a live marketing page that guess landed on the
+    // language picker and the FAQ list, and ROSE reported page chrome as the
+    // client's conversation. Accept the guess only when it is both strong and
+    // anchored to a reply field — a chat ROSE can act on always has a composer.
     const best = scored[0]!;
-    return { el: best.el, hinted: best.score >= 0.6 };
+    if (!input || best.score < 0.6) return null;
+    return { el: best.el, hinted: true };
   }
 
   /** Message-shaped elements inside a candidate container. */
@@ -322,6 +334,10 @@ export class GenericChatAdapter extends BaseAdapter {
       ]
         .filter(Boolean)
         .join(' ');
+
+      // A language picker is a list of repeated children and outscores an empty
+      // message log on structure alone, so rule these out before scoring.
+      if (NON_CONTAINER_HINTS.test(attr)) continue;
 
       const declaredContainer =
         el.getAttribute('role') === 'log' || !!el.getAttribute('aria-live') || MESSAGE_CONTAINER_HINTS.test(attr);
@@ -422,7 +438,13 @@ export class GenericChatAdapter extends BaseAdapter {
     const confident = this.cache.get(doc)?.hinted ?? false;
     const scoped = container ? out.filter((el) => container.contains(el)) : [];
     if (scoped.length) return dedupeNested(scoped);
-    return confident ? [] : dedupeNested(out);
+    if (confident) return [];
+    // Unscoped results are the last resort for a chat ROSE cannot structure. They
+    // are only meaningful if the page has a reply field: without a composer there
+    // is no conversation here, and on coomeet.com/flirtify.com this fallback
+    // returned nav items and marketing copy ("Europe", "9+ million users") as the
+    // client's messages.
+    return input ? dedupeNested(out) : [];
   }
 
   private isMessageLike(el: HTMLElement, input: HTMLElement | null): boolean {

@@ -169,6 +169,45 @@ describe('GenericChatAdapter — message container detection', () => {
     const container = new GenericChatAdapter().getMessageContainer(document);
     expect(container?.getAttribute('role')).toBe('log');
   });
+
+  it('does not mistake a navigation list for the message container', () => {
+    // Found on flirtify.com: `ul.language-dropdown__list` is a list of repeated
+    // children whose class satisfies MESSAGE_CONTAINER_HINTS via "…list…", so it
+    // won over the (empty) real log and ROSE reported the page chrome.
+    document.body.innerHTML = `
+      <div class="page">
+        <ul class="language-dropdown__list">
+          <li>English</li><li>Français</li><li>Deutsch</li><li>Español</li>
+        </ul>
+        <div class="chat-panel">
+          <div class="chat-log" id="log" role="log" aria-live="polite"></div>
+          <textarea placeholder="Message…"></textarea>
+        </div>
+      </div>`;
+    const adapter = new GenericChatAdapter();
+    expect(adapter.getMessageContainer(document)?.id).toBe('log');
+    expect(adapter.getMessages(document)).toEqual([]);
+  });
+
+  it('ignores a site menu even when nothing else looks like a log', () => {
+    document.body.innerHTML = `
+      <nav><ul class="navbar-menu"><li>Home</li><li>About</li><li>Login</li></ul></nav>
+      <textarea placeholder="Message…"></textarea>`;
+    expect(new GenericChatAdapter().getMessageContainer(document)).toBeNull();
+  });
+
+  it('reports no messages on a page with no composer', () => {
+    // Found on coomeet.com and flirtify.com: with no reply field the adapter fell
+    // back to unscoped page text and returned nav items and marketing copy
+    // ("Europe", "9+ million Worldwide users") as the client's messages.
+    document.body.innerHTML = `
+      <header><nav><ul><li>Europe</li><li>East Asia</li><li>Sign up</li></ul></nav></header>
+      <main><p>9+ million Worldwide users</p><p>700+ thousand Verified accounts</p></main>
+      <footer><p>© 2026, CooMeet</p></footer>`;
+    const adapter = new GenericChatAdapter();
+    expect(adapter.getMessageContainer(document)).toBeNull();
+    expect(adapter.getMessages(document)).toEqual([]);
+  });
 });
 
 describe('GenericChatAdapter — message extraction', () => {
