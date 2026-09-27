@@ -48,9 +48,12 @@ export const DEFAULT_SETTINGS: RoseSettings = {
         viaProxy: false,
       },
       {
+        // The recommended production shape: extension → ROSE backend → provider.
+        // The provider credential never enters the extension; only the backend
+        // token does, and the backend never forwards it upstream.
         id: 'rose-backend',
         label: 'ROSE Backend (secure proxy)',
-        baseUrl: 'http://localhost:8787/v1',
+        baseUrl: 'https://name-rose-ia-backend.onrender.com/v1',
         apiKey: '',
         model: 'rose-default',
         fastModel: 'rose-fast',

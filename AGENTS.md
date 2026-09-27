@@ -230,6 +230,56 @@ in `npm test` / `npm run verify:browser`.
 provider and pass any placeholder. That is what Phase 7 does — the point is the
 wiring, not the credential.
 
+### Multi-provider routing (`backend/providers.mjs`, `router.mjs`, `health.mjs`)
+
+The backend is no longer single-provider. Three plain-ESM modules split the job:
+
+- **`providers.mjs` — the registry.** Declares every provider (openrouter,
+  gemini, groq, cerebras, mistral, nvidia, cloudflare), its credential
+  variable(s), its base URL and its default models. A provider is *configured*
+  only when **every** variable it declares is present and non-blank — a blank
+  `OPENROUTER_API_KEY` is the common deployment mistake and treating it as a key
+  turns a clear config error into an opaque upstream 401. Cloudflare needs both
+  `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Any provider accepts a
+  `<ID>_BASE_URL` override, and the legacy `OPENROUTER_BASE_URL` still works.
+- **`router.mjs` — role routing with bounded retry and fallback.** Four roles
+  (`primary`, `fast`, `complex`, `translation`) each map to a provider, all
+  overridable with `ROSE_ROLE_*`. A request is tagged `rose_task`
+  (`generation` / `translation`) and `rose_complex`, so the router picks the role
+  from a field rather than by parsing the prompt. Retry and fallback are bounded:
+  ≤3 provider hops × ≤2 attempts each, so no unbounded loop is possible. An auth
+  failure is **not** retried — retrying a rejected credential only burns budget.
+- **`health.mjs` — bounded circuit breaker.** Per-provider success/latency and
+  failure counters. A provider degrades only after repeated *transient* failures,
+  degrades immediately (and longer) on an auth failure, and the degradation
+  **expires after a TTL** — it never becomes permanent and no loop depends on it.
+  Metrics reset on restart; nothing is persisted.
+
+`orderChain` reorders the fallback tail from *measured* evidence only — a
+degraded provider goes last, and the lower observed latency goes first. The
+role's own provider is never displaced, and a provider with no measurement keeps
+its configured position, so config still decides until evidence exists.
+
+`GET /v1/rose/diagnostics` reports the operator-facing picture: every provider
+with `configured` and `health`, the credential *variable names* it needs (never
+values), the role assignment, the last error and the average latency. It is
+reachable by anyone who can reach the service, so it is tested to contain no
+credential — in the response or in `/health`.
+
+The extension reaches all of this through the `rose-backend` provider
+(`viaProxy: true`): it sends `rose_task`/`rose_complex`, sends **no** `model`
+(an `omitModel` flag keeps the placeholder `rose-default` out of the body, or it
+would override the backend's model selection), and sends no `Authorization`
+unless a backend token is configured. On success the backend returns
+`x-rose-provider` / `x-rose-model` / `x-rose-role` / `x-rose-latency-ms`
+(exposed through CORS) so the debug panel can name what actually served the
+request.
+
+`tests/backend/providers-router.test.ts` covers the registry, health metrics and
+router against local HTTP servers; `tests/backend/diagnostics.test.ts` covers the
+health and diagnostics surface; `tests/core/proxy-wiring.test.ts` pins what the
+extension puts on the wire.
+
 ## Cross-origin iframe validation (`scripts/validation/phase6-iframe.mjs`)
 
 Reproduces the CooMeet shape: a shell page on `127.0.0.1:8788` with **no chat of

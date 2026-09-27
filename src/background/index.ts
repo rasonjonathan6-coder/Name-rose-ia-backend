@@ -20,6 +20,8 @@ import type {
   GenerationRequest,
   MessageResponse,
   OverlayIntent,
+  QualityIssue,
+  QualityReport,
   RoseSettings,
   StatsEvent,
   Suggestion,
@@ -483,22 +485,72 @@ async function requestSuggestions(
     .slice(-6)
     .map((m) => m.text);
 
-  const suggestions: Suggestion[] = [];
-  for (const s of result.suggestions) {
-    const report = guard.check(s, memory, {
-      expectedLanguage: language,
-      maxChars: settings.ai.maxResponseChars,
-      recentReplies,
-      incoming: req.incoming,
-      incomingLanguage: language,
+  const screen = (list: Suggestion[], reports: QualityReport[]): Suggestion[] => {
+    const out: Suggestion[] = [];
+    list.forEach((s, i) => {
+      const report = reports[i]!;
+      if (report.ok) out.push(s);
+      else log.warn('quality', `suggestion blocked (${report.issues.map((x) => x.code).join(', ')})`);
     });
-    if (report.ok) suggestions.push(s);
-    else {
-      log.warn('quality', `suggestion blocked (${report.issues.map((i) => i.code).join(', ')})`);
+    return out;
+  };
+
+  const guardOpts = {
+    expectedLanguage: language,
+    maxChars: settings.ai.maxResponseChars,
+    recentReplies,
+    incoming: req.incoming,
+    incomingLanguage: language,
+  };
+
+  let reports = result.suggestions.map((s) => guard.check(s, memory, guardOpts));
+  let suggestions = screen(result.suggestions, reports);
+  let finalResult = result;
+
+  // Anti-repetition / quality gate retry. Bounded to a single extra generation:
+  // if the model repeats itself twice we surface a controlled fallback rather
+  // than looping. Only retried when there is genuinely nothing usable, or every
+  // usable reply was flagged as a repetition.
+  const REPETITION_CODES: QualityIssue['code'][] = ['duplicate', 'repetition-opening', 'repeated-question'];
+  const onlyRepetitions =
+    suggestions.length > 0 && reports.every((r) => r.issues.some((i) => REPETITION_CODES.includes(i.code)));
+
+  if (!req.force && (suggestions.length === 0 || onlyRepetitions)) {
+    log.info('quality', 'regenerating once to avoid repetition', {
+      reason: suggestions.length === 0 ? 'no-usable-suggestion' : 'all-repetitions',
+    });
+    try {
+      const retryResult = await getGeneration().generate(
+        {
+          conversation: req.conversation,
+          memory: { ...memory, language },
+          incoming: req.incoming,
+          history,
+          style: req.style,
+          customStyle: req.customStyle,
+          length: req.length,
+          count: Math.max(1, Math.min(4, req.count)),
+          targetLanguage: language,
+        },
+        { force: true },
+      );
+      const retryReports = retryResult.suggestions.map((s) => guard.check(s, memory, guardOpts));
+      const retrySuggestions = screen(retryResult.suggestions, retryReports);
+      // Keep the retry only if it is actually less repetitive.
+      if (retrySuggestions.length > suggestions.length) {
+        suggestions = retrySuggestions;
+        reports = retryReports;
+        finalResult = retryResult;
+      }
+    } catch (err) {
+      // A failed retry must not lose the replies we already have.
+      log.warn('quality', 'regeneration failed; keeping the first result', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
-  if (suggestions.length === 0 && result.suggestions.length > 0) {
+  if (suggestions.length === 0 && finalResult.suggestions.length > 0) {
     return {
       ok: false,
       error: 'Every generated suggestion failed the quality check. Try Regenerate or adjust the style.',

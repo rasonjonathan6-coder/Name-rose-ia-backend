@@ -29,6 +29,19 @@ export interface CompletionRequest {
   /** Abort after this many ms (default 30s). */
   timeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * Extra top-level fields merged into the request body. Used to pass routing
+   * hints (`rose_task`, `rose_complex`) to the ROSE backend so it can pick a
+   * model role without parsing the prompt. Ignored by a provider that does not
+   * know the field.
+   */
+  extra?: Record<string, unknown>;
+  /**
+   * Leave `model` out of the request body entirely. Used with the ROSE backend,
+   * which selects the model from its own role configuration — sending the
+   * extension's placeholder would override that selection.
+   */
+  omitModel?: boolean;
 }
 
 export interface CompletionResponse {
@@ -126,12 +139,13 @@ export class AIClient {
     }
 
     const body: Record<string, unknown> = {
-      model: req.model ?? config.model,
       messages: req.messages,
       temperature: req.temperature ?? config.temperature,
       max_tokens: req.maxTokens ?? config.maxTokens,
     };
+    if (!req.omitModel) body.model = req.model ?? config.model;
     if (req.json) body.response_format = { type: 'json_object' };
+    if (req.extra) Object.assign(body, req.extra);
 
     let res: Response;
     try {

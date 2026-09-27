@@ -80,6 +80,39 @@ export class ResponseQualityGuard {
       }
     }
 
+    // Repetition goes beyond whole-message similarity: a reply can be worded
+    // differently yet still reuse the same opening, ask the same question, or
+    // repeat the same emoji. Each is a distinct tell that the operator is
+    // looking at a template rather than a person.
+    if (opts.recentReplies.length) {
+      const opening = repeatOpening(clean, opts.recentReplies);
+      if (opening) {
+        issues.push({
+          code: 'repetition-opening',
+          severity: 'warn',
+          detail: `reuses the opening of a recent reply: "${opening.slice(0, 50)}"`,
+        });
+      }
+
+      const repeatedQ = repeatQuestion(clean, opts.recentReplies);
+      if (repeatedQ) {
+        issues.push({
+          code: 'repeated-question',
+          severity: 'info',
+          detail: `asks a question already asked: "${repeatedQ.slice(0, 60)}"`,
+        });
+      }
+
+      const emoji = repeatedEmoji(clean, opts.recentReplies);
+      if (emoji) {
+        issues.push({
+          code: 'repeated-emoji',
+          severity: 'info',
+          detail: `reuses the emoji ${emoji} from a recent reply`,
+        });
+      }
+    }
+
     // Language check: only meaningful when we have real signal on both sides.
     const expected =
       opts.expectedLanguage === 'auto' ? opts.incomingLanguage ?? memory.language : opts.expectedLanguage;
@@ -191,6 +224,54 @@ export class ResponseQualityGuard {
   /** True when every suggestion should be regenerated instead of shown. */
   shouldRegenerate(reports: QualityReport[]): boolean {
     if (reports.length === 0) return true;
-    return reports.every((r) => !r.ok || r.issues.some((i) => i.code === 'duplicate'));
+    const REPETITION: QualityIssue['code'][] = ['duplicate', 'repetition-opening', 'repeated-question'];
+    return reports.every((r) => !r.ok || r.issues.some((i) => REPETITION.includes(i.code)));
   }
+}
+
+const EMOJI_RE = /\p{Extended_Pictographic}/gu;
+
+/** First few words, normalised — the part a reader recognises as "the same". */
+function openingOf(text: string, words = 3): string {
+  return fingerprint(text).split(' ').slice(0, words).join(' ');
+}
+
+/**
+ * Same opening as a recent reply. Four words (rather than three) is the measured
+ * threshold: three-word matches fire on ordinary shared phrasing ("I am doing
+ * well…"), while four catches the reused template without false positives.
+ */
+function repeatOpening(reply: string, recent: string[]): string | null {
+  const opening = openingOf(reply, 4);
+  if (opening.split(' ').length < 4) return null;
+  for (const prev of recent) {
+    if (openingOf(prev, 4) === opening) return prev;
+  }
+  return null;
+}
+
+/** A question in this reply that also appears in a recent reply. */
+function repeatQuestion(reply: string, recent: string[]): string | null {
+  const asked = reply.split(/(?<=[?!])/).filter((s) => s.includes('?'));
+  if (!asked.length) return null;
+  for (const q of asked) {
+    const qf = fingerprint(q);
+    if (qf.length < 4) continue;
+    for (const prev of recent) {
+      for (const prevQ of prev.split(/(?<=[?!])/)) {
+        if (prevQ.includes('?') && similarity(prevQ, q) > 0.86) return q.trim();
+      }
+    }
+  }
+  return null;
+}
+
+/** The same emoji used in a recent reply — heavy-handed emoji recycling. */
+function repeatedEmoji(reply: string, recent: string[]): string | null {
+  const emojis = reply.match(EMOJI_RE);
+  if (!emojis?.length) return null;
+  for (const e of emojis) {
+    if (recent.some((prev) => prev.includes(e))) return e;
+  }
+  return null;
 }

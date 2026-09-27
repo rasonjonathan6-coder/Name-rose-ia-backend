@@ -1,13 +1,22 @@
 # ROSE backend
 
-A small, dependency-free proxy that sits between the extension and OpenRouter:
+A small, dependency-free proxy that sits between the extension and one or more
+model providers:
 
 ```
-ROSE extension  →  ROSE backend (HTTPS)  →  OpenRouter
+ROSE extension  →  ROSE backend (HTTPS)  →  provider (OpenRouter, Groq, …)
 ```
 
 The point is that the **extension never holds the provider credential**. The key
 lives only in the backend's environment; the extension sends none.
+
+It is multi-provider. A registry declares each supported provider and the
+credential variable it needs; supplying that variable adds the provider to the
+routing chain, and leaving it blank removes it. Each request is routed to a
+*role* — `primary`, `fast`, `complex`, `translation` — with bounded retry and
+fallback, and a provider that starts failing is temporarily taken out of the
+chain. `GET /v1/rose/diagnostics` reports the whole picture. See
+[`../AGENTS.md`](../AGENTS.md) for the invariants.
 
 ## Why a proxy
 
@@ -24,20 +33,39 @@ OPENROUTER_API_KEY=... node backend/rose-backend.mjs
 npm run backend
 ```
 
-There is nothing to install — the file uses only `node:http` and the built-in
+There is nothing to install — the files use only `node:http` and the built-in
 `fetch` (Node 20+).
 
 ### Environment
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OPENROUTER_API_KEY` | — | **Required.** The provider credential. Never logged, never returned. |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Provider base URL. Point it at a mock to test without a real key. |
+| `OPENROUTER_API_KEY` | — | A provider credential. At least one provider must be configured. Never logged, never returned. |
+| `GROQ_API_KEY`, `GEMINI_API_KEY`, `CEREBRAS_API_KEY`, `MISTRAL_API_KEY`, `NVIDIA_API_KEY` | — | Additional providers. Optional; each joins the chain when set. |
+| `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | — | Cloudflare needs **both**; the account id builds the URL. |
+| `<ID>_BASE_URL` | provider default | Override a provider's base URL. Point it at a mock to test without a real key. |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Legacy alias for the OpenRouter base URL. |
+| `ROSE_ROLE_PRIMARY` / `_FAST` / `_COMPLEX` / `_TRANSLATION` | see code | Which provider serves each role. |
+| `ROSE_FALLBACK_ORDER` | (built-in order) | Comma-separated provider ids for the fallback tail. |
+| `ROSE_MAX_PROVIDER_HOPS` | `3` | Ceiling on providers tried per request. |
+| `ROSE_MAX_ATTEMPTS_PER_PROVIDER` | `2` | Ceiling on attempts against one provider. |
+| `ROSE_DEGRADE_AFTER` | `2` | Consecutive transient failures before a provider is skipped. |
+| `ROSE_DEGRADED_TTL_MS` | `60000` | How long that skip lasts. |
+| `ROSE_AUTH_DEGRADED_TTL_MS` | `300000` | Longer skip after a rejected credential. |
 | `PORT` | `8787` | Listen port. `0` picks a free one. |
 | `HOST` | `0.0.0.0` when hosted, else `127.0.0.1` | Bind address. |
 | `ROSE_BACKEND_TOKEN` | — | When set, callers must send `Authorization: Bearer <token>`. |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated CORS allowlist. |
 | `REQUEST_TIMEOUT_MS` | `60000` | Upstream timeout. |
+
+### Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/chat/completions` | The OpenAI-compatible surface the extension calls. Accepts optional `rose_task` and `rose_complex` routing hints. On success returns `x-rose-provider`, `x-rose-model`, `x-rose-role`, `x-rose-latency-ms`. |
+| `GET /health` | Liveness plus a stable `provider`/`keyConfigured` summary. |
+| `GET /v1/rose/diagnostics` | Every provider with `configured`/`health`, the credential *variable names* required, the role assignment, the last error and average latency. Contains no credential. |
+| `GET /v1/models` | Enough of the OpenAI surface for a client that probes it first. |
 
 ### Hosting (Render, Railway, Fly, Heroku)
 

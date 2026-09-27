@@ -24,6 +24,9 @@ platform in a browser.
 | Reply-field detection + text insertion | yes | yes (E2E insertion tests) | yes — text written into web.libera.chat's real composer and read back |
 | Runtime site activation (host grant + dynamic script) | yes | yes (popup-flow check) | yes — registers and injects on an arbitrary live origin |
 | AI generation (OpenAI-compatible / OpenRouter) | yes | yes (43 generation + 21 client tests) | yes — validated against a real keyless provider (Pollinations `gpt-oss-20b`), see Phase 5 |
+| Multi-provider backend routing (roles, fallback, retry, circuit breaker) | yes | yes (60 registry/router/health tests + 9 diagnostics + 7 proxy-wiring tests) | yes — exercised against a real fake upstream: a primary provider returning 503 falls back to Groq, and the failing provider is reported `DEGRADED` while the healthy one is `HEALTHY` |
+| Provider diagnostics (`GET /v1/rose/diagnostics`) | yes | yes (9 tests, including a no-credential assertion) | yes against a local backend; **not deployed** on the Render commit currently live (the endpoint 404s there) |
+| Safe redaction of upstream error bodies | yes | yes (backend test asserting the credential never appears) | yes |
 | Client memory + isolation | yes | yes (22 memory + 27 E2E tests) | yes — facts and summaries persisted and read back against a real model |
 | Translation / language detection | yes | yes (17 language tests + real-model fr→en / en→fr) | yes |
 | Anti-repetition quality guard | yes | yes (27 tests) | yes |
@@ -152,13 +155,24 @@ key is entered by the user and stored under `rose:secrets` in
 
 The supported shapes are: OpenRouter, any OpenAI-compatible endpoint (OpenAI,
 Groq, Gemini's OpenAI-compat endpoint, a self-hosted model), and a **proxy
-backend** (`viaProxy: true`, default `rose-backend` → `http://localhost:8787/v1`).
+backend** (`viaProxy: true`, default `rose-backend` →
+`https://name-rose-ia-backend.onrender.com/v1`, the deployed Render service).
 The proxy shape is the one to use if you do not want a key in the browser at all:
 the backend holds it and the extension sends no `Authorization` header. That
-backend is included — see [`backend/README.md`](backend/README.md). Run it with
-`npm run backend`; it needs only `OPENROUTER_API_KEY` in its environment and has
-no dependencies. The keyless `pollinations` entry is for testing the pipeline
+backend is included — see [`backend/README.md`](backend/README.md). Run it
+locally with `npm run backend`; it needs at least one provider credential
+(`OPENROUTER_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`, …) and has no
+dependencies. The keyless `pollinations` entry is for testing the pipeline
 without a credential.
+
+**Multi-provider routing.** The backend is not tied to one provider. It holds a
+registry of providers (OpenRouter, Gemini, Groq, Cerebras, Mistral, NVIDIA,
+Cloudflare) and routes each request to a *role* — `primary`, `fast`, `complex`,
+`translation` — with bounded retry and fallback across the providers that are
+actually configured. Add a credential variable and that provider joins the chain;
+leave it blank and it is simply absent. `GET /v1/rose/diagnostics` reports what
+is configured, each provider's health, and the role assignment. Details and
+invariants are in [`AGENTS.md`](AGENTS.md).
 
 A provider with `requiresKey: false` (or `viaProxy: true`) works with no local
 key; any other provider without one fails fast with `no-key` and a readable

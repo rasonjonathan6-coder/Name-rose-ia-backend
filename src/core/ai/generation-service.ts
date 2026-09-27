@@ -63,6 +63,14 @@ export class GenerationService {
     const complexity = classifyComplexity(req.incoming, req.history.length);
     const model = pickModel(provider, 'generation', complexity);
 
+    // A proxy provider (the ROSE backend) chooses the concrete model itself, from
+    // its own role configuration. Sending the extension's placeholder model name
+    // would override that choice and address a model the provider does not have.
+    const modelHint = provider.viaProxy ? undefined : model;
+    const extra = provider.viaProxy
+      ? { rose_task: 'generation', rose_complex: complexity === 'complex' }
+      : undefined;
+
     const key = cacheKey({
       conversationId: req.conversation.id,
       incoming: req.incoming,
@@ -92,7 +100,7 @@ export class GenerationService {
 
     const { value, cached } = await this.cache.resolve(
       key,
-      () => this.callProvider(req, provider, model, complexity, opts.signal),
+      () => this.callProvider(req, provider, modelHint, complexity, opts.signal, extra),
       opts.force,
     );
 
@@ -103,14 +111,15 @@ export class GenerationService {
   private async callProvider(
     req: GenerationRequest,
     provider: AIProviderConfig,
-    model: string,
+    model: string | undefined,
     complexity: TaskComplexity,
     signal?: AbortSignal,
+    extra?: Record<string, unknown>,
   ): Promise<Omit<GenerationResult, 'cached'>> {
     const prompt = buildGenerationPrompt(req);
     const started = Date.now();
     log.info('ai', 'request started', {
-      model,
+      model: model ?? 'router-selected',
       complexity,
       conversationId: req.conversation.id,
       approxChars: prompt.approxChars,
@@ -125,6 +134,8 @@ export class GenerationService {
       maxTokens: tokenBudget('generation', complexity, req.length),
       json: true,
       signal,
+      extra,
+      omitModel: model === undefined,
     });
 
     let suggestions = this.parseSuggestions(res.text, req.count);
@@ -142,6 +153,8 @@ export class GenerationService {
         maxTokens: tokenBudget('generation', complexity, req.length),
         json: false,
         signal,
+        extra,
+        omitModel: model === undefined,
       });
       suggestions = this.parseSuggestions(retry.text, req.count);
     }
@@ -344,9 +357,11 @@ export class GenerationService {
           { role: 'system', content: prompt.system },
           { role: 'user', content: prompt.user },
         ],
-        model,
+        model: provider.viaProxy ? undefined : model,
         maxTokens: tokenBudget('translation', 'simple', 'medium'),
         temperature: 0.2,
+        extra: provider.viaProxy ? { rose_task: 'translation' } : undefined,
+        omitModel: provider.viaProxy,
       });
       this.deps.onUsage?.({
         provider: provider.id,

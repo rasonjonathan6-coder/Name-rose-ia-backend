@@ -252,7 +252,13 @@ export interface QualityIssue {
     | 'contradiction'
     | 'empty'
     | 'off-context'
-    | 'banned-content';
+    | 'banned-content'
+    /** Reuses a recent reply's opening — reads as a template, not a person. */
+    | 'repetition-opening'
+    /** Asks a question the assistant already asked. */
+    | 'repeated-question'
+    /** Reuses the same emoji set as a recent reply. */
+    | 'repeated-emoji';
   severity: 'info' | 'warn' | 'block';
   detail: string;
 }
