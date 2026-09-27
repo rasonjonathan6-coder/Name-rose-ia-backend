@@ -34,10 +34,25 @@ There is nothing to install — the file uses only `node:http` and the built-in
 | `OPENROUTER_API_KEY` | — | **Required.** The provider credential. Never logged, never returned. |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Provider base URL. Point it at a mock to test without a real key. |
 | `PORT` | `8787` | Listen port. `0` picks a free one. |
-| `HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` behind TLS or a reverse proxy. |
+| `HOST` | `0.0.0.0` when hosted, else `127.0.0.1` | Bind address. |
 | `ROSE_BACKEND_TOKEN` | — | When set, callers must send `Authorization: Bearer <token>`. |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated CORS allowlist. |
 | `REQUEST_TIMEOUT_MS` | `60000` | Upstream timeout. |
+
+### Hosting (Render, Railway, Fly, Heroku)
+
+The backend detects a hosted environment and binds `0.0.0.0` automatically. This
+matters more than it looks: a platform router cannot reach a loopback socket, so
+a service bound to `127.0.0.1` starts cleanly, logs that it is listening, and then
+never answers a single request. The failure is silent — the logs look healthy and
+every request times out.
+
+Detection is a platform marker (`RENDER`, `RAILWAY_ENVIRONMENT`, `DYNO`,
+`FLY_APP_NAME`, `K_SERVICE`, …), or a container that was handed a `PORT`. A plain
+`PORT=3000 node backend/rose-backend.mjs` on a laptop keeps the loopback default
+rather than quietly exposing the service to the local network. `HOST` overrides
+both. `render.yaml` is included; set `OPENROUTER_API_KEY` and
+`ROSE_BACKEND_TOKEN` in the dashboard, never in the file.
 
 **Set `ROSE_BACKEND_TOKEN` before exposing this publicly.** Without it the
 endpoint is an open relay for your provider quota — anyone who learns the URL can

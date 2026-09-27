@@ -13,8 +13,14 @@
  *   OPENROUTER_API_KEY   required. The provider credential. Never logged,
  *                        never returned, never echoed.
  *   OPENROUTER_BASE_URL  default https://openrouter.ai/api/v1
- *   PORT                 default 8787. `0` binds an ephemeral port.
- *   HOST                 default 127.0.0.1. Bind 0.0.0.0 behind TLS/a proxy.
+ *   PORT                 default 8787, or the platform's PORT when hosted.
+ *                        `0` binds an ephemeral port.
+ *   HOST                 default 0.0.0.0 when a hosting platform is detected
+ *                        (Render, Railway, Fly, Heroku, …), otherwise
+ *                        127.0.0.1. A loopback socket is unreachable from a
+ *                        platform router, so binding loopback in the cloud
+ *                        serves nothing — hence the detection. Set it
+ *                        explicitly to override.
  *   ROSE_BACKEND_TOKEN   optional. When set, callers must present it as
  *                        `Authorization: Bearer <token>`. Set this before
  *                        exposing the service publicly: without it, the
@@ -32,9 +38,37 @@
  */
 
 import { createServer } from 'node:http';
+import { existsSync, readFileSync } from 'node:fs';
 
 const PORT = Number(process.env.PORT ?? 8787);
-const HOST = process.env.HOST ?? '127.0.0.1';
+
+/**
+ * Hosting platforms route external traffic into the container, so a loopback
+ * socket is invisible to them: the service starts, logs that it is listening,
+ * and never answers a single request. That is a silent, total failure, so the
+ * default host depends on where we are running.
+ *
+ * Binding all interfaces is only done when we are confident we are hosted —
+ * a platform marker, or a container with a platform-assigned PORT. A plain
+ * `PORT=3000 node backend/rose-backend.mjs` on a laptop keeps the loopback
+ * default rather than quietly exposing the service to the local network.
+ */
+function detectHosted() {
+  const markers = [
+    'RENDER', 'RENDER_EXTERNAL_URL', 'RAILWAY_ENVIRONMENT', 'FLY_APP_NAME',
+    'DYNO', 'HEROKU_APP_NAME', 'K_SERVICE', 'WEBSITE_SITE_NAME', 'VERCEL',
+  ];
+  if (markers.some((m) => process.env[m])) return true;
+  if (process.env.PORT === undefined) return false;
+  if (process.pid === 1) return true; // containers run the service as PID 1
+  if (existsSync('/.dockerenv')) return true;
+  try {
+    return /docker|kubepods|containerd|podman/.test(readFileSync('/proc/1/cgroup', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+const HOST = process.env.HOST ?? (detectHosted() ? '0.0.0.0' : '127.0.0.1');
 const API_KEY = process.env.OPENROUTER_API_KEY ?? '';
 const BACKEND_TOKEN = process.env.ROSE_BACKEND_TOKEN ?? '';
 const UPSTREAM = (process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1').replace(/\/+$/, '');

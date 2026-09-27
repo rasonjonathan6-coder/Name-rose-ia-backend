@@ -13,6 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
+import { spawn } from 'node:child_process';
 
 const TEST_KEY = 'test-key-not-a-real-credential';
 
@@ -325,6 +326,63 @@ describe('ROSE backend — ALLOWED_ORIGINS', () => {
 
     const res = await fetch(`${base}/health`, { headers: { origin: 'https://evil.example' } });
     expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Host binding
+// ---------------------------------------------------------------------------
+
+describe('ROSE backend — host binding', () => {
+  // Runs the real process: the host is chosen at import time, and importing the
+  // module repeatedly would hit Node's module cache and re-report the first
+  // evaluation. Spawning also exercises the actual startup path.
+  const hostFor = (env: Record<string, string>): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['backend/rose-backend.mjs'], {
+        env: { ...cleanEnv, ...env, PORT: '0', OPENROUTER_API_KEY: 'dummy-not-a-credential' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let out = '';
+      const done = (fn: () => void) => {
+        child.kill();
+        fn();
+      };
+      const timer = setTimeout(() => done(() => reject(new Error(`no startup line; got: ${out}`))), 10_000);
+      child.stdout.on('data', (c) => {
+        out += String(c);
+        const m = out.match(/listening host=(\S+)/);
+        if (m) {
+          clearTimeout(timer);
+          done(() => resolve(m[1]));
+        }
+      });
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+    });
+
+  const cleanEnv = (() => {
+    const env = { ...process.env } as Record<string, string>;
+    for (const k of ['RENDER', 'RENDER_EXTERNAL_URL', 'RAILWAY_ENVIRONMENT', 'DYNO', 'FLY_APP_NAME', 'K_SERVICE', 'HOST', 'PORT', 'WEBSITE_SITE_NAME', 'VERCEL']) {
+      delete env[k];
+    }
+    return env;
+  })();
+
+  it('binds loopback when run plainly on a laptop', async () => {
+    expect(await hostFor({})).toBe('127.0.0.1');
+  });
+
+  it('binds all interfaces when a platform marker is present', async () => {
+    expect(await hostFor({ RENDER: 'true' })).toBe('0.0.0.0');
+    expect(await hostFor({ RAILWAY_ENVIRONMENT: 'production' })).toBe('0.0.0.0');
+    expect(await hostFor({ DYNO: 'web.1' })).toBe('0.0.0.0');
+  });
+
+  it('honours an explicit HOST over detection', async () => {
+    expect(await hostFor({ RENDER: 'true', HOST: '127.0.0.1' })).toBe('127.0.0.1');
   });
 });
 

@@ -1,0 +1,36 @@
+# Render blueprint for the ROSE backend.
+#
+# The backend is dependency-free, so there is no build step and no install step.
+# Deploy it as a Web Service, not a Static Site: it is a long-running HTTP
+# server, and Render only routes traffic to a bound port.
+#
+# Set the secrets in the Render dashboard (Environment → Secret Files /
+# Environment Variables). Do not put them here — this file is committed.
+#
+#   OPENROUTER_API_KEY   required  — the provider credential
+#   ROSE_BACKEND_TOKEN   required  — otherwise the endpoint is an open relay
+#   ALLOWED_ORIGINS      optional  — default `*` is correct for an extension
+
+services:
+  - type: web
+    name: rose-ia-backend
+    runtime: node
+    plan: free
+    buildCommand: '' # no dependencies to install
+    startCommand: node backend/rose-backend.mjs
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: '20'
+      # Render injects PORT and RENDER; the backend detects RENDER and binds
+      # 0.0.0.0. Setting HOST explicitly is harmless and makes it obvious.
+      - key: HOST
+        value: 0.0.0.0
+      # Secrets are declared without values so Render prompts for them rather
+      # than committing anything here.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: ROSE_BACKEND_TOKEN
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: '*'
